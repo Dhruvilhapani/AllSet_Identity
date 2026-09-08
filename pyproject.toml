@@ -1,0 +1,16 @@
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's Depends() in argument defaults is idiomatic — the framework
+# evaluates it per request, not once at import. Same ignore
+# AllSet_Broker_Tools carries in its own pyproject.toml.
+"app/api/**" = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
