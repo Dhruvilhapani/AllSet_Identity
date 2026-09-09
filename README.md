@@ -225,6 +225,22 @@ rather than stubbed.
    Each new account is emailed a set-password link and chooses its own
    password. This retires the hardcoded `Allset@2024` seeds.
 
+   **Known gap:** there is no page for that link to land on yet. Neither admin
+   UI has a `/reset-password` route and this service has no
+   `/password/reset-confirm`, so the emailed link currently redirects to the
+   project's Site URL and nothing completes the flow. Until that is built, use
+   `scripts/set_password.py` for the first admin and for anyone who cannot get
+   in:
+
+   ```bash
+   python scripts/set_password.py krips@allset.in
+   ```
+
+   It prompts twice, echoes nothing, verifies the sign-in afterwards, and needs
+   no existing session. Also note Supabase's built-in mail service is
+   rate-limited to a few messages an hour and is not meant for production, so a
+   burst of invites stops being delivered without reporting an error.
+
 ## Shadow migration of CMS passwords
 
 The CMS has real users whose passwords are Django PBKDF2 hashes. Supabase stores

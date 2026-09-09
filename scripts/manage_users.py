@@ -80,7 +80,7 @@ def login() -> str:
     if r.status_code == 403:
         die('that account is not active')
     if r.status_code == 429:
-        die('too many attempts — wait a minute')
+        die('too many attempts - wait a minute')
     if r.status_code != 200:
         die(f'login failed: HTTP {r.status_code} {r.text[:200]}')
 
@@ -165,7 +165,7 @@ def main() -> None:
         print(f'{email} is now {"active" if active else "INACTIVE"}')
 
     else:
-        die(f'unknown action {action!r} — try list, create, roles or status')
+        die(f'unknown action {action!r} - try list, create, roles or status')
 
 
 if __name__ == '__main__':
