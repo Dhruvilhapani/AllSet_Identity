@@ -56,6 +56,12 @@ v1.include_router(introspect.router)
 v1.include_router(admin.router)
 app.include_router(v1)
 
+# Firebase Hosting's `run` rewrite for /identity/** forwards the request path
+# unchanged (it does not strip the matched prefix, unlike a dev-server proxy
+# rewrite), so the same routes must also answer under /identity/v1/... for
+# browser calls made through that same-origin path in production.
+app.include_router(v1, prefix='/identity')
+
 
 @app.get('/health', tags=['health'])
 def health() -> dict:
