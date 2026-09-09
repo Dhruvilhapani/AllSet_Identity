@@ -1,0 +1,17 @@
+# Only needed when LEGACY_MIGRATION_ENABLED=true.
+#
+# app/legacy.py reads the CMS's users_teammember table to verify a Django
+# PBKDF2 password on first login. It imports psycopg2 lazily precisely so the
+# service — and its test suite — runs without this installed.
+#
+# Kept out of requirements.txt because psycopg2-binary has no wheel for every
+# interpreter. Where it does not, pip falls back to compiling from source,
+# which needs Postgres headers (pg_config) and fails without them — and that
+# failure aborts the entire install, not just this package.
+#
+#   pip install -r requirements-legacy.txt
+#
+# Once every profile row has legacy_migrated_at set, turn the flag off, delete
+# app/legacy.py and its tests, and delete this file.
+-r requirements.txt
+psycopg2-binary>=2.9.10

@@ -131,19 +131,32 @@ everyone out during a blip or let anyone in.
 ## Local development
 
 ```bash
-python -m venv .venv && . .venv/Scripts/activate   # Windows
-pip install -r requirements-dev.txt
-cp .env.example .env        # then fill in the Supabase values
+python -m venv .venv
+. .venv/Scripts/activate          # Windows; source .venv/bin/activate elsewhere
+python -m pip install -r requirements-dev.txt
+cp .env.example .env              # then fill in the Supabase values
 uvicorn app.main:app --reload --port 8100
 ```
-
-The pinned versions target **Python 3.11**, matching the Docker image and Broker
-Tools' services. On a newer interpreter some pins have no wheels — install
-unpinned for local work, or use a 3.11 venv.
 
 ```bash
 pytest -q          # 159 tests, no network access needed
 ruff check .
+```
+
+Everything in `requirements.txt` ships wheels, so the install needs no compiler
+and no Postgres headers. If `uvicorn` comes back as *not recognized*, the
+install failed and put **nothing** in the venv — `pip install` aborts entirely
+when any one package fails to build, so a single unbuildable dependency takes
+uvicorn down with it. Check that you activated the venv (`where uvicorn` should
+point inside `.venv`), then re-read the install output for the first error
+rather than the last.
+
+`psycopg2` is deliberately **not** a runtime dependency. It is used only by
+`app/legacy.py` for the shadow migration, which is off by default and imports
+it lazily. Install it only if you turn that on:
+
+```bash
+pip install -r requirements-legacy.txt
 ```
 
 Tests mock Supabase at the HTTP boundary with `respx` and mint real RS256 tokens

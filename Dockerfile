@@ -5,17 +5,21 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# libpq for psycopg2 (the shadow-migration read of the CMS database), gcc to
-# build it. Both dropped from the final image would need a multi-stage build;
-# kept simple here since the image is small and rebuilt rarely.
+# libpq and gcc are only a fallback for psycopg2-binary. On python:3.11-slim it
+# installs from a manylinux wheel and needs neither, but keeping them means the
+# build cannot fail the way a local install on a newer interpreter does, where
+# no wheel exists and pip silently falls back to compiling from source.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libpq-dev gcc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# The image installs requirements-legacy.txt, which is requirements.txt plus
+# psycopg2 — so LEGACY_MIGRATION_ENABLED can be turned on without rebuilding.
+# Local development installs requirements.txt alone and needs no compiler.
+COPY requirements.txt requirements-legacy.txt ./
+RUN pip install --no-cache-dir -r requirements-legacy.txt
 
 COPY app ./app
 

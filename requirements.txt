@@ -1,9 +1,19 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-gunicorn==23.0.0
+# Runtime dependencies.
+#
+# Everything here ships wheels, so `pip install -r requirements.txt` never needs
+# a compiler or Postgres headers. psycopg2 deliberately lives in
+# requirements-legacy.txt instead: it is a native dependency used only by
+# app/legacy.py, which is off by default and lazily imported — a failed build of
+# it used to abort the whole install, leaving even uvicorn missing.
+#
+# Pinned for reproducible deploys. Every version below declares
+# Requires-Python >=3.10 or lower, so these satisfy both the Dockerfile's
+# python:3.11-slim and a current interpreter for local work.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+gunicorn==26.2.0
 httpx==0.28.1
-pydantic[email]==2.10.4
-python-dotenv==1.0.1
-python-jose[cryptography]==3.3.0
+pydantic[email]==2.13.5
+python-dotenv==1.2.3
+python-jose[cryptography]==3.5.0
 passlib==1.7.4
-psycopg2-binary==2.9.10

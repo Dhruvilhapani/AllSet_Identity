@@ -1,5 +1,9 @@
+# Local development and CI.
+#
+# Deliberately does NOT pull in requirements-legacy.txt: the test suite mocks
+# Supabase at the HTTP boundary and never touches Postgres, so a native
+# dependency would only make the install fragile for no benefit.
 -r requirements.txt
-pytest==8.3.4
-pytest-asyncio==0.25.0
-respx==0.22.0
-ruff==0.8.6
+pytest==8.4.2
+respx==0.23.1
+ruff==0.14.6

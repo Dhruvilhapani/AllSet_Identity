@@ -32,10 +32,20 @@ def _psycopg2():
     psycopg2 is a native dependency needed only while LEGACY_MIGRATION_ENABLED
     is on, and this whole module is deleted once every profile has been
     migrated. Importing lazily means the service — and its test suite — runs
-    without a compiler present.
+    without it, which is why it is not in requirements.txt.
     """
-    import psycopg2
-    import psycopg2.extras
+    try:
+        import psycopg2
+        import psycopg2.extras
+    except ImportError as exc:
+        # Without this, enabling the flag produces a bare ImportError from
+        # inside a login attempt, which reads as a service bug rather than a
+        # missing optional dependency.
+        raise RuntimeError(
+            'LEGACY_MIGRATION_ENABLED is on but psycopg2 is not installed. '
+            'Run: pip install -r requirements-legacy.txt  '
+            '(or set LEGACY_MIGRATION_ENABLED=false)'
+        ) from exc
 
     return psycopg2
 
