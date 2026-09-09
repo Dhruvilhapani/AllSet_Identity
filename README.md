@@ -142,7 +142,7 @@ Tools' services. On a newer interpreter some pins have no wheels — install
 unpinned for local work, or use a 3.11 venv.
 
 ```bash
-pytest -q          # 157 tests, no network access needed
+pytest -q          # 159 tests, no network access needed
 ruff check .
 ```
 

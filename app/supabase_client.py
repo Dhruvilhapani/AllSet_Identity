@@ -128,6 +128,20 @@ def refresh_session(refresh_token: str) -> dict:
             headers=_anon_headers(),
             json={'refresh_token': refresh_token},
         )
+
+    # On this grant the refresh token is the only input, so any 4xx means the
+    # token is no good. Worth special-casing because GoTrue answers a revoked
+    # or expired refresh token with HTTP 400 and error_code
+    # "validation_failed" — a code generic enough that _raise_for_status
+    # deliberately does not treat it as a credential failure elsewhere, since
+    # there it can also mean a malformed body.
+    #
+    # Getting this wrong is not cosmetic: both frontends clear the session and
+    # redirect to login on 401, and do neither on 400. A 400 left the user
+    # sitting on a dead session with a generic error.
+    if 400 <= response.status_code < 500:
+        raise InvalidCredentials('refresh token is invalid or expired')
+
     _raise_for_status(response, 'token refresh')
     return response.json()
 

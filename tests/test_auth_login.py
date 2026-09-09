@@ -363,6 +363,32 @@ def test_expired_refresh_token_is_401(client):
 
 
 @respx.mock
+def test_revoked_refresh_token_is_401_not_400(client):
+    """GoTrue answers a revoked or expired refresh token with HTTP 400 and the
+    generic error_code "validation_failed". This must still surface as 401:
+    both frontends clear the session and redirect to login on 401 and do
+    neither on 400, so a 400 leaves the user on a dead session."""
+    respx.post(TOKEN_URL).mock(return_value=Response(400, json={
+        'code': 400, 'error_code': 'validation_failed',
+        'msg': 'Refresh token is not valid',
+    }))
+    response = client.post('/v1/auth/refresh', json={'refresh_token': 'revoked'})
+    assert response.status_code == 401, (
+        'a revoked refresh token must read as 401 so clients re-authenticate'
+    )
+
+
+@respx.mock
+def test_a_refresh_server_error_is_not_mistaken_for_a_bad_token(client):
+    """A 5xx is an outage, not a verdict on the token — it must not send the
+    user to a login screen that also cannot work."""
+    respx.post(TOKEN_URL).mock(return_value=Response(503, json={'msg': 'unavailable'}))
+    assert client.post(
+        '/v1/auth/refresh', json={'refresh_token': 'fine'}
+    ).status_code == 502
+
+
+@respx.mock
 def test_password_reset_request_never_reveals_whether_the_account_exists(client):
     respx.post(RECOVER_URL).mock(return_value=Response(404, json={'msg': 'not found'}))
     response = client.post('/v1/auth/password/reset-request', json={'email': 'nobody@allset.in'})
