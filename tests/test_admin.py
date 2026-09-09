@@ -16,6 +16,9 @@ from tests.conftest import SUPABASE_URL
 ADMIN_USERS_URL = f'{SUPABASE_URL}/auth/v1/admin/users'
 RECOVER_URL = f'{SUPABASE_URL}/auth/v1/recover'
 PROFILES_URL = f'{SUPABASE_URL}/rest/v1/user_profiles'
+# GoTrue has no admin logout endpoint, so revocation goes through this RPC.
+# See db/003_revoke_sessions.sql.
+REVOKE_URL = f'{SUPABASE_URL}/rest/v1/rpc/identity_revoke_user_sessions'
 
 USER_ID = '11111111-2222-3333-4444-555555555555'
 OTHER_ID = '99999999-8888-7777-6666-555555555555'
@@ -108,7 +111,7 @@ def test_empty_role_set_is_allowed(client, make_token, jwks_mock):
     respx.patch(PROFILES_URL).mock(
         return_value=Response(200, json=[profile_row(roles=[])])
     )
-    respx.post(f'{ADMIN_USERS_URL}/{OTHER_ID}/logout').mock(return_value=Response(204))
+    respx.post(REVOKE_URL).mock(return_value=Response(204))
 
     token = make_token(roles=['admin'])
     response = client.patch(
@@ -129,7 +132,7 @@ def test_role_change_signs_the_user_out_everywhere(client, make_token, jwks_mock
     respx.patch(PROFILES_URL).mock(
         return_value=Response(200, json=[profile_row(roles=['editor'])])
     )
-    logout = respx.post(f'{ADMIN_USERS_URL}/{OTHER_ID}/logout').mock(
+    logout = respx.post(REVOKE_URL).mock(
         return_value=Response(204)
     )
 
@@ -149,7 +152,7 @@ def test_deactivation_signs_the_user_out_everywhere(client, make_token, jwks_moc
     respx.patch(PROFILES_URL).mock(
         return_value=Response(200, json=[profile_row(is_active=False)])
     )
-    logout = respx.post(f'{ADMIN_USERS_URL}/{OTHER_ID}/logout').mock(
+    logout = respx.post(REVOKE_URL).mock(
         return_value=Response(204)
     )
 
@@ -189,7 +192,7 @@ def test_admin_can_change_their_own_non_admin_roles(client, make_token, jwks_moc
     respx.patch(PROFILES_URL).mock(
         return_value=Response(200, json=[profile_row(user_id=USER_ID, roles=['admin', 'sales'])])
     )
-    respx.post(f'{ADMIN_USERS_URL}/{USER_ID}/logout').mock(return_value=Response(204))
+    respx.post(REVOKE_URL).mock(return_value=Response(204))
 
     token = make_token(roles=['admin'], user_id=USER_ID)
     response = client.patch(
@@ -221,7 +224,7 @@ def test_tech_can_demote_an_admin(client, make_token, jwks_mock):
     respx.patch(PROFILES_URL).mock(
         return_value=Response(200, json=[profile_row(user_id=OTHER_ID, roles=['manager'])])
     )
-    respx.post(f'{ADMIN_USERS_URL}/{OTHER_ID}/logout').mock(return_value=Response(204))
+    respx.post(REVOKE_URL).mock(return_value=Response(204))
 
     token = make_token(roles=['tech'], user_id=USER_ID)
     response = client.patch(
@@ -324,3 +327,69 @@ def test_a_db_check_violation_is_reported_as_a_client_error(client, make_token, 
         headers=auth_header(token),
     )
     assert response.status_code == 400
+
+
+# ── Revocation must never fail silently ──────────────────────────────────────
+# These exist because of a real bug: admin_sign_out_everywhere called
+# POST /admin/users/{id}/logout, which GoTrue does not implement. It returned
+# 404 "page not found", and the client treated 404 as acceptable — so nothing
+# was logged and sessions were never revoked. A role change appeared to
+# succeed while the old role kept working until the token expired.
+
+@respx.mock
+def test_a_missing_revocation_function_is_not_swallowed(client, make_token, jwks_mock):
+    """PostgREST answers 404 on an RPC path when the function does not exist,
+    i.e. db/003_revoke_sessions.sql was never applied. That must surface, not
+    be mistaken for "no sessions to revoke"."""
+    respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
+    respx.patch(PROFILES_URL).mock(
+        return_value=Response(200, json=[profile_row(roles=['editor'])])
+    )
+    respx.post(REVOKE_URL).mock(return_value=Response(404, json={'message': 'Not Found'}))
+
+    token = make_token(roles=['admin'])
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}/roles',
+        json={'roles': ['editor']},
+        headers=auth_header(token),
+    )
+    assert response.status_code >= 500, (
+        'a role change whose sessions were not revoked must not report success'
+    )
+
+
+@respx.mock
+def test_a_failed_revocation_is_not_swallowed(client, make_token, jwks_mock):
+    respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
+    respx.patch(PROFILES_URL).mock(
+        return_value=Response(200, json=[profile_row(is_active=False)])
+    )
+    respx.post(REVOKE_URL).mock(return_value=Response(500, text='boom'))
+
+    token = make_token(roles=['admin'])
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}/status',
+        json={'is_active': False},
+        headers=auth_header(token),
+    )
+    assert response.status_code >= 500
+
+
+@respx.mock
+def test_revocation_targets_the_right_user(client, make_token, jwks_mock):
+    """The RPC takes the user id in the body; sending the wrong one would sign
+    out somebody else and leave the intended user's sessions live."""
+    respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
+    respx.patch(PROFILES_URL).mock(
+        return_value=Response(200, json=[profile_row(roles=['viewer'])])
+    )
+    revoke = respx.post(REVOKE_URL).mock(return_value=Response(200, text='3'))
+
+    token = make_token(roles=['admin'])
+    client.patch(
+        f'/v1/admin/users/{OTHER_ID}/roles',
+        json={'roles': ['viewer']},
+        headers=auth_header(token),
+    )
+    assert revoke.called
+    assert OTHER_ID in revoke.calls.last.request.read().decode()

@@ -79,9 +79,16 @@ request to Django's `/api/auth/verify/`, and that hop is replaced, not added to.
 
 **Revocation.** Because roles ride in the JWT and are cached for 60s, a role
 change takes up to 60s plus the remaining access-token lifetime to bite. Two
-mitigations: access tokens are 30 minutes (down from 8 hours in both projects),
-and every role change or deactivation calls Supabase's global sign-out so
-refresh tokens die immediately.
+mitigations: keep the access-token lifetime short (set it in Authentication ->
+Sessions; Supabase defaults to 3600s), and every role change or deactivation
+revokes the user's sessions so refresh tokens die immediately.
+
+That revocation goes through the `identity_revoke_user_sessions` RPC, not a
+GoTrue endpoint. GoTrue has no admin logout: `POST /admin/users/{id}/logout`
+does not exist, and `POST /logout?scope=global` needs the user's own access
+token. Both verified against a live project. If `db/003_revoke_sessions.sql`
+has not been applied, role changes fail loudly rather than reporting success
+while the old role keeps working.
 
 ## Endpoints
 
@@ -135,7 +142,7 @@ Tools' services. On a newer interpreter some pins have no wheels — install
 unpinned for local work, or use a 3.11 venv.
 
 ```bash
-pytest -q          # 154 tests, no network access needed
+pytest -q          # 157 tests, no network access needed
 ruff check .
 ```
 
@@ -161,8 +168,10 @@ rather than stubbed.
 
 2. **Apply the SQL**, in order:
    ```
+   db/000_preflight.sql        (read-only check -- expect all zeros)
    db/001_schema.sql
    db/002_access_token_hook.sql
+   db/003_revoke_sessions.sql
    ```
    This adds exactly one table to `public` — `user_profiles`, alongside the 14
    the leads schema already has — plus `identity_set_updated_at()`,

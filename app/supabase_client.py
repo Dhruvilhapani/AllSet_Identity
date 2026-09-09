@@ -189,20 +189,47 @@ def admin_set_password(user_id: str, password: str) -> dict:
 
 
 def admin_sign_out_everywhere(user_id: str) -> None:
-    """Kill every refresh token for a user.
+    """Kill every session for a user.
 
     Called on deactivation and on any role change. Roles live in the JWT and
-    consumers cache for 60s, so without this a revoked role would stay usable
-    until the access token expired.
+    consumers cache for 60s, so without this a revoked role stays usable until
+    the access token expires.
+
+    Goes through the identity_revoke_user_sessions RPC rather than a GoTrue
+    endpoint, because GoTrue has none that an admin can use:
+    POST /admin/users/{id}/logout does not exist (404 "page not found"), and
+    POST /logout?scope=global needs the user's own access token. Both verified
+    against a live project. See db/003_revoke_sessions.sql.
+
+    Raises on failure. An earlier version swallowed 404 as acceptable, which
+    meant the wrong endpoint reported nothing at all and revocation silently
+    did nothing — the caller must be able to tell the difference between "role
+    removed and sessions killed" and "role removed, sessions still live".
     """
-    with _client() as client:
+    with httpx.Client(
+        base_url=f'{config.SUPABASE_URL}/rest/v1',
+        timeout=config.HTTP_TIMEOUT_SECONDS,
+    ) as client:
         response = client.post(
-            f'/admin/users/{user_id}/logout',
+            '/rpc/identity_revoke_user_sessions',
             headers=_service_headers(),
-            json={'scope': 'global'},
+            json={'target_user_id': user_id},
         )
-    if response.status_code not in (200, 204, 404):
-        logger.warning('global sign-out for %s returned HTTP %s', user_id, response.status_code)
+
+    if response.status_code == 404:
+        # The function is missing, not the user — a PostgREST 404 on an RPC
+        # path means the migration was never applied.
+        logger.error(
+            'identity_revoke_user_sessions is missing; apply '
+            'db/003_revoke_sessions.sql. Sessions were NOT revoked.'
+        )
+        raise SupabaseError('session revocation is not configured', status_code=500)
+
+    if not response.is_success:
+        logger.error('session revocation failed: HTTP %s', response.status_code)
+        raise SupabaseError('session revocation failed', status_code=502)
+
+    logger.info('revoked %s session row(s)', response.text.strip() or '?')
 
 
 def admin_delete_user(user_id: str) -> None:
