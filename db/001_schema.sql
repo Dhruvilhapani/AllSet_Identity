@@ -1,10 +1,26 @@
 -- AllSet Identity — profile + role storage.
 --
--- Runs against the dedicated identity Supabase project (ap-south-1, colocated
--- with Cloud Run asia-south1). This project holds auth.users and nothing else;
--- the CMS's property catalogue and Broker Tools' call_logs stay in their own
--- projects. See db/002_access_token_hook.sql for the JWT claim injection that
--- keeps /v1/introspect free of any database round trip.
+-- Runs against the **call_logs** Supabase project (qizrtmvgcwxuycbpkeua,
+-- ap-northeast-2), chosen because the free tier allows only two projects and a
+-- dedicated third one was not available. auth.users therefore lives alongside
+-- Broker Tools' leads schema.
+--
+-- Two consequences of sharing that project, recorded here because they are not
+-- obvious from the code:
+--
+--   1. db/README.md in AllSet_Broker_Tools describes 001_schema.sql there as a
+--      scripted replacement of this project. That rebuild is now also an auth
+--      migration: the JWT signing key is per-project, so moving would
+--      invalidate every issued token and log everyone out. A rebuild must
+--      apply this file too, or the new database has no profiles.
+--   2. The service_role key for this project reaches every lead, note and call
+--      record, not just identity data. It belongs only in the identity
+--      service's environment.
+--
+-- This file adds exactly one table to `public` and two functions. The `auth`
+-- schema is provisioned by Supabase in every project and is not touched here.
+-- See db/002_access_token_hook.sql for the JWT claim injection that keeps
+-- /v1/introspect free of any database round trip.
 --
 -- Idempotent: safe to re-run.
 
@@ -57,7 +73,13 @@ comment on column public.user_profiles.roles is
 -- Lookup by email happens on every shadow-migrated login; the unique constraint
 -- above already provides the index, so no extra one is needed.
 
-create or replace function public.set_updated_at()
+-- Deliberately NOT named set_updated_at(). The call_logs database this shares
+-- already has a public.set_updated_at() with three live triggers attached, and
+-- `create or replace` matches on name plus argument signature — so the generic
+-- name would have silently swapped the body out from under all three. The
+-- bodies are probably identical, but "probably" is not a good enough reason to
+-- rewrite a function three triggers depend on.
+create or replace function public.identity_set_updated_at()
 returns trigger
 language plpgsql
 as $$
@@ -70,7 +92,7 @@ $$;
 drop trigger if exists user_profiles_set_updated_at on public.user_profiles;
 create trigger user_profiles_set_updated_at
     before update on public.user_profiles
-    for each row execute function public.set_updated_at();
+    for each row execute function public.identity_set_updated_at();
 
 -- RLS is enabled with no policies. Only the identity service touches this table
 -- and it connects with the service-role key, which bypasses RLS. Enabling it

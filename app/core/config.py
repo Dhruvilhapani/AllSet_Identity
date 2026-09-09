@@ -57,10 +57,15 @@ def _int(name: str, default: int) -> int:
 
 DEBUG = _flag('IDENTITY_DEBUG')
 
-# ── Supabase (identity project) ──────────────────────────────────────────────
+# ── Supabase (the call_logs project) ─────────────────────────────────────────
+# Shared with Broker Tools' leads schema rather than dedicated, because the
+# free tier allows only two projects.
+#
 # SERVICE_ROLE_KEY bypasses RLS and can mint sessions for any user. It must
 # never reach a browser — that is the whole reason this service exists rather
-# than each frontend talking to Supabase directly.
+# than each frontend talking to Supabase directly. Sharing the project widens
+# what the key reaches to every lead and call record in it, which is another
+# reason it lives in exactly one process.
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').rstrip('/')
 SUPABASE_ANON_KEY = os.environ.get('SUPABASE_ANON_KEY', '')
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')

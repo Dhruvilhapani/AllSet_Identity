@@ -56,7 +56,7 @@ all of the above. Nothing else should encode role rules.
                                       ▼
                             ┌──────────────────┐
                             │ AllSet Identity  │──── Supabase Auth
-                            │    (this repo)   │     (identity project)
+                            │    (this repo)   │     (call_logs project)
                             └──────────────────┘
                                       ▲
         ┌────── POST /v1/introspect ───┘
@@ -145,16 +145,35 @@ rather than stubbed.
 
 ## First-time setup
 
-1. **Create the Supabase project.** A *new, dedicated* project — not the CMS's
-   analytics project and not `call_logs`. Provision it in **ap-south-1
-   (Mumbai)** so it is colocated with Cloud Run `asia-south1`; Broker Tools
-   currently pays ~120ms per round trip reaching Seoul.
+1. **Use the existing `call_logs` project** — `qizrtmvgcwxuycbpkeua`,
+   ap-northeast-2. Auth shares it with Broker Tools' leads schema because the
+   Supabase free tier allows only two projects. No new project is created.
+
+   Nothing needs enabling first: the `auth` schema is provisioned in every
+   Supabase project from creation, so `auth.users`, `auth.sessions` and the
+   rest already exist there, empty. They are visible under **Authentication →
+   Users**, not in the Table Editor.
+
+   Being in Seoul rather than Mumbai costs less than it looks. `/v1/introspect`
+   verifies locally against cached JWKS and reads roles from the token, so the
+   per-request hot path never crosses regions. Only login, refresh and the
+   admin endpoints pay the hop, and the access-token hook runs inside Postgres.
 
 2. **Apply the SQL**, in order:
    ```
    db/001_schema.sql
    db/002_access_token_hook.sql
    ```
+   This adds exactly one table to `public` — `user_profiles`, alongside the 14
+   the leads schema already has — plus `identity_set_updated_at()`,
+   `custom_access_token_hook()` and the `citext` extension.
+
+   Both function names are deliberately checked against the live database
+   rather than assumed. `call_logs` already has a `public.set_updated_at()`
+   with three triggers on it, so the generic name would have been replaced
+   underneath them; the `identity_` prefix is why. Before applying to any new
+   database, re-run the pre-flight in `db/000_preflight.sql` — a collision is
+   silent, not an error.
 
 3. **Register the hook**: Authentication → Hooks → *Customize Access Token (JWT)
    Claims* → Postgres → `public.custom_access_token_hook`.
