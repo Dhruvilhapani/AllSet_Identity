@@ -23,16 +23,28 @@ PROFILES_URL = f'{SUPABASE_URL}/rest/v1/user_profiles'
 USER_ID = '11111111-2222-3333-4444-555555555555'
 
 
-def session_body(roles=('viewer',), is_active=True, email='someone@allset.in'):
-    """A GoTrue token response, including the app_metadata our hook writes."""
+def session_body(token, email='someone@allset.in'):
+    """A GoTrue token response, shaped the way GoTrue actually shapes it.
+
+    The critical detail, and the reason a bug shipped past an earlier version of
+    this helper: `user.app_metadata` in the response BODY carries only
+    {provider, providers}. The Custom Access Token Hook writes roles into the
+    JWT it mints, never into auth.users.raw_app_meta_data. A fixture that put
+    roles in app_metadata modelled Supabase incorrectly and let
+    _session_response read them from a place that is always empty in
+    production, so every Broker Tools login failed with "no access".
+
+    `token` must therefore be a real signed JWT — use the make_token fixture.
+    Tests using this need jwks_mock too, since the token is now verified.
+    """
     return {
-        'access_token': 'access-token-value',
+        'access_token': token,
         'refresh_token': 'refresh-token-value',
         'expires_in': 1800,
         'user': {
             'id': USER_ID,
             'email': email,
-            'app_metadata': {'roles': list(roles), 'is_active': is_active},
+            'app_metadata': {'provider': 'email', 'providers': ['email']},
             'user_metadata': {'full_name': 'Some One'},
         },
     }
@@ -52,9 +64,9 @@ def reset_login_rate_limit():
 # ── Happy path ───────────────────────────────────────────────────────────────
 
 @respx.mock
-def test_successful_login_returns_tokens_and_capabilities(client):
+def test_successful_login_returns_tokens_and_capabilities(client, make_token, jwks_mock):
     respx.post(TOKEN_URL).mock(
-        return_value=Response(200, json=session_body(roles=['manager', 'sales']))
+        return_value=Response(200, json=session_body(make_token(roles=['manager', 'sales'])))
     )
 
     response = client.post(
@@ -63,7 +75,6 @@ def test_successful_login_returns_tokens_and_capabilities(client):
     assert response.status_code == 200
 
     body = response.json()
-    assert body['access_token'] == 'access-token-value'
     assert body['refresh_token'] == 'refresh-token-value'
     assert body['token_type'] == 'bearer'
     # The user block matches /v1/introspect, so a client can render from it
@@ -74,17 +85,21 @@ def test_successful_login_returns_tokens_and_capabilities(client):
 
 
 @respx.mock
-def test_login_normalises_the_email(client):
-    route = respx.post(TOKEN_URL).mock(return_value=Response(200, json=session_body()))
+def test_login_normalises_the_email(client, make_token, jwks_mock):
+    route = respx.post(TOKEN_URL).mock(
+        return_value=Response(200, json=session_body(make_token(roles=['viewer'])))
+    )
     client.post('/v1/auth/login', json={'email': '  SomeOne@AllSet.in  ', 'password': 'pw'})
     assert route.calls.last.request.read().decode().count('someone@allset.in') == 1
 
 
 @respx.mock
-def test_login_with_no_roles_succeeds_but_grants_nothing(client):
+def test_login_with_no_roles_succeeds_but_grants_nothing(client, make_token, jwks_mock):
     """The offboarding state must not be an error — the person can still sign in
     and see an empty app list rather than a confusing failure."""
-    respx.post(TOKEN_URL).mock(return_value=Response(200, json=session_body(roles=[])))
+    respx.post(TOKEN_URL).mock(
+        return_value=Response(200, json=session_body(make_token(roles=[])))
+    )
     body = client.post(
         '/v1/auth/login', json={'email': 'someone@allset.in', 'password': 'pw'}
     ).json()
@@ -121,9 +136,10 @@ def test_unknown_email_gives_the_same_message_as_a_bad_password(client):
 
 
 @respx.mock
-def test_deactivated_account_is_refused_with_403(client):
+def test_deactivated_account_is_refused_with_403(client, make_token, jwks_mock):
     respx.post(TOKEN_URL).mock(
-        return_value=Response(200, json=session_body(roles=['admin'], is_active=False))
+        return_value=Response(200, json=session_body(
+            make_token(roles=['admin'], is_active=False)))
     )
     response = client.post(
         '/v1/auth/login', json={'email': 'gone@allset.in', 'password': 'pw'}
@@ -183,7 +199,9 @@ def legacy_enabled(monkeypatch):
 
 
 @respx.mock
-def test_legacy_password_is_adopted_on_first_login(client, legacy_enabled, monkeypatch):
+def test_legacy_password_is_adopted_on_first_login(
+    client, legacy_enabled, monkeypatch, make_token, jwks_mock
+):
     """The point of the shadow migration: an existing CMS user signs in with
     their old Django password and never notices the move."""
     monkeypatch.setattr(
@@ -197,7 +215,7 @@ def test_legacy_password_is_adopted_on_first_login(client, legacy_enabled, monke
     token_route = respx.post(TOKEN_URL).mock(
         side_effect=[
             Response(400, json={'error_code': 'invalid_credentials'}),
-            Response(200, json=session_body(roles=['editor'])),
+            Response(200, json=session_body(make_token(roles=['editor']))),
         ]
     )
     respx.get(ADMIN_USERS_URL).mock(return_value=Response(200, json={'users': []}))
@@ -249,7 +267,7 @@ def test_wrong_legacy_password_does_not_create_an_account(client, legacy_enabled
 
 @respx.mock
 def test_already_provisioned_user_gets_password_set_not_recreated(
-    client, legacy_enabled, monkeypatch
+    client, legacy_enabled, monkeypatch, make_token, jwks_mock
 ):
     """Someone provisioned by an admin who then logs in with their legacy CMS
     password: adopt the password onto the existing account."""
@@ -263,7 +281,7 @@ def test_already_provisioned_user_gets_password_set_not_recreated(
     respx.post(TOKEN_URL).mock(
         side_effect=[
             Response(400, json={'error_code': 'invalid_credentials'}),
-            Response(200, json=session_body(roles=['viewer'])),
+            Response(200, json=session_body(make_token(roles=['viewer']))),
         ]
     )
     respx.get(ADMIN_USERS_URL).mock(
@@ -336,18 +354,25 @@ def test_legacy_cms_admin_becomes_a_global_admin():
 # ── Refresh and logout ───────────────────────────────────────────────────────
 
 @respx.mock
-def test_refresh_returns_a_new_pair(client):
-    respx.post(TOKEN_URL).mock(return_value=Response(200, json=session_body(roles=['admin'])))
+def test_refresh_returns_a_new_pair(client, make_token, jwks_mock):
+    respx.post(TOKEN_URL).mock(
+        return_value=Response(200, json=session_body(make_token(roles=['admin'])))
+    )
     response = client.post('/v1/auth/refresh', json={'refresh_token': 'old-refresh'})
     assert response.status_code == 200
-    assert response.json()['access_token'] == 'access-token-value'
+    body = response.json()
+    assert body['access_token']
+    # Refresh goes through the same _session_response, so the roles must come
+    # off the new token rather than the response body's app_metadata.
+    assert body['user']['roles'] == ['admin']
+    assert body['user']['apps']['broker_tools']['unrestricted_leads'] is True
 
 
 @respx.mock
-def test_refresh_refuses_a_deactivated_account(client):
+def test_refresh_refuses_a_deactivated_account(client, make_token, jwks_mock):
     """Deactivated mid-session: the session must not be extendable."""
     respx.post(TOKEN_URL).mock(
-        return_value=Response(200, json=session_body(roles=['admin'], is_active=False))
+        return_value=Response(200, json=session_body(make_token(roles=['admin'], is_active=False)))
     )
     assert client.post(
         '/v1/auth/refresh', json={'refresh_token': 'old-refresh'}
@@ -393,3 +418,82 @@ def test_password_reset_request_never_reveals_whether_the_account_exists(client)
     respx.post(RECOVER_URL).mock(return_value=Response(404, json={'msg': 'not found'}))
     response = client.post('/v1/auth/password/reset-request', json={'email': 'nobody@allset.in'})
     assert response.status_code == 202
+
+
+# ── The login response must derive roles from the token ─────────────────────
+# Regression tests for a shipped bug: _session_response read roles from the
+# GoTrue response body's user.app_metadata. The Custom Access Token Hook writes
+# into the JWT it mints, never into auth.users.raw_app_meta_data, so that field
+# holds only {provider, providers} and roles came back empty. Broker Tools
+# checks data.user.apps.broker_tools.access the moment login returns, so every
+# sign-in there failed with "no access". CMS was unaffected only because it
+# ignores the block and fetches its own /auth/me/.
+
+@respx.mock
+def test_login_roles_come_from_the_token_not_the_response_body(
+    client, make_token, jwks_mock
+):
+    """The body deliberately carries NO roles, exactly as GoTrue sends it."""
+    body = session_body(make_token(roles=['lead_manager']))
+    assert 'roles' not in body['user']['app_metadata'], 'fixture must model GoTrue'
+
+    respx.post(TOKEN_URL).mock(return_value=Response(200, json=body))
+    response = client.post(
+        '/v1/auth/login', json={'email': 'someone@allset.in', 'password': 'pw'}
+    )
+    assert response.status_code == 200
+
+    user = response.json()['user']
+    assert user['roles'] == ['lead_manager'], (
+        'roles must be read from the access token; the response body never has them'
+    )
+    assert user['apps']['broker_tools']['access'] is True, (
+        'a client that gates on this immediately after login would refuse the user'
+    )
+    assert user['apps']['broker_tools']['unrestricted_leads'] is True
+
+
+@respx.mock
+def test_login_response_matches_introspect_for_the_same_token(
+    client, make_token, jwks_mock, service_headers
+):
+    """Both must be derived from the same source, since a client renders its UI
+    from the login response and the backend authorises from introspect."""
+    token = make_token(roles=['manager', 'presales'])
+    respx.post(TOKEN_URL).mock(return_value=Response(200, json=session_body(token)))
+
+    login = client.post(
+        '/v1/auth/login', json={'email': 'someone@allset.in', 'password': 'pw'}
+    ).json()
+    introspected = client.post(
+        '/v1/introspect', json={'token': token}, headers=service_headers
+    ).json()
+
+    assert login['user']['apps'] == introspected['apps']
+    assert login['user']['roles'] == introspected['roles']
+
+
+@respx.mock
+def test_an_unverifiable_token_is_a_502_not_an_empty_role_set(
+    client, make_token, jwks_mock
+):
+    """If Supabase hands back a token we cannot verify, the configuration is
+    wrong. Saying so beats returning a confidently empty role set that reads as
+    a permissions problem."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = other.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+
+    respx.post(TOKEN_URL).mock(
+        return_value=Response(200, json=session_body(make_token(roles=['admin'], key=pem)))
+    )
+    response = client.post(
+        '/v1/auth/login', json={'email': 'someone@allset.in', 'password': 'pw'}
+    )
+    assert response.status_code == 502

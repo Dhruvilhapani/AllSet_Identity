@@ -16,7 +16,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from app import capabilities, legacy, profiles, supabase_client
 from app.api.deps import Caller, current_caller
-from app.core import config
+from app.core import config, security
 
 logger = logging.getLogger(__name__)
 
@@ -75,30 +75,49 @@ def _rate_limit(email: str) -> None:
                 del _attempts[stale_key]
 
 
-def _session_response(session: dict, profile_roles: list[str] | None = None) -> dict:
+def _session_response(session: dict) -> dict:
     """Shape a GoTrue token response for the frontends.
 
-    The `user` block is the same payload /v1/introspect returns, so a client can
+    Roles come from the ACCESS TOKEN, not from the response body's
+    `user.app_metadata`. The Custom Access Token Hook writes into the JWT it
+    mints — it does not touch `auth.users.raw_app_meta_data` — so the body's
+    app_metadata holds only `{provider, providers}` and reading roles from it
+    always yielded an empty set. Broker Tools checks
+    `data.user.apps.broker_tools.access` the instant login returns, so that
+    made every sign-in there fail with "no access".
+
+    Decoding the token here means this block is derived from exactly the same
+    source as /v1/introspect and /v1/auth/me, which is what lets a client
     render its UI from the login response without a second call.
     """
     user = session.get('user') or {}
-    app_metadata = user.get('app_metadata') or {}
+    access_token = session.get('access_token') or ''
 
-    roles = profile_roles if profile_roles is not None else app_metadata.get('roles') or []
-    roles = sorted(role for role in roles if isinstance(role, str))
-    is_active = bool(app_metadata.get('is_active', True))
+    try:
+        claims = security.verify_access_token(access_token)
+        user_id, email, roles, is_active, full_name = security.claims_to_identity(claims)
+    except security.TokenInvalid as exc:
+        # Supabase just issued this token, so failing to verify it means the
+        # project's signing keys or issuer do not match our configuration.
+        # Better to say so than to hand back a confidently empty role set.
+        logger.error('could not verify a freshly issued access token: %s', exc)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            'the issued token could not be verified; check SUPABASE_URL and the '
+            'access token hook registration',
+        ) from exc
 
     return {
-        'access_token': session.get('access_token'),
+        'access_token': access_token,
         'refresh_token': session.get('refresh_token'),
         'token_type': 'bearer',
         'expires_in': session.get('expires_in', config.ACCESS_TOKEN_TTL_SECONDS),
         'user': capabilities.build_payload(
-            user_id=user.get('id', ''),
-            email=user.get('email', ''),
+            user_id=user_id or user.get('id', ''),
+            email=email or user.get('email', ''),
             roles=roles,
             is_active=is_active,
-            full_name=(user.get('user_metadata') or {}).get('full_name', ''),
+            full_name=full_name or (user.get('user_metadata') or {}).get('full_name', ''),
         ),
     }
 

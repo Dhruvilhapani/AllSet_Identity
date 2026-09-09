@@ -139,7 +139,7 @@ uvicorn app.main:app --reload --port 8100
 ```
 
 ```bash
-pytest -q          # 159 tests, no network access needed
+pytest -q          # 162 tests, no network access needed
 ruff check .
 ```
 
@@ -211,9 +211,19 @@ rather than stubbed.
    match the value set on every consuming service.
 
 7. **Provision the roster.** The nine people in Broker Tools'
-   `db/call_logs/002_reference_data.sql` get accounts via
-   `POST /v1/admin/users`, which emails each a set-password link. This retires
-   the hardcoded `Allset@2024` seeds.
+   `db/call_logs/002_reference_data.sql` need accounts. Either use Users &
+   Roles in the CMS admin panel, or `scripts/manage_users.py`, which needs only
+   this service running:
+
+   ```bash
+   python scripts/manage_users.py list
+   python scripts/manage_users.py create jinal@allset.in "Jinal Jadeja" presales
+   python scripts/manage_users.py roles khush@allset.in lead_manager viewer
+   python scripts/manage_users.py status bhavin@allset.in off
+   ```
+
+   Each new account is emailed a set-password link and chooses its own
+   password. This retires the hardcoded `Allset@2024` seeds.
 
 ## Shadow migration of CMS passwords
 
