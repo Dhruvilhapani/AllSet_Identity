@@ -9,3 +9,4 @@ venv/
 .ruff_cache/
 secrets/
 *.sqlite3
+deploy/env*.yaml

@@ -41,6 +41,12 @@ class PasswordResetRequest(BaseModel):
     email: EmailStr
 
 
+class CredentialPasswordChangeRequest(BaseModel):
+    email: EmailStr
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=10, max_length=256)
+
+
 # ── Login rate limiting ──────────────────────────────────────────────────────
 # In-process, per-email. Replaces the CMS's users/throttles.py, which was
 # IP-keyed and therefore shared across everyone behind one office NAT. Supabase
@@ -244,6 +250,62 @@ def change_password(
     supabase_client.admin_set_password(caller.user_id, payload.new_password)
     # Every other session was authenticated with the old password.
     supabase_client.admin_sign_out_everywhere(caller.user_id)
+
+
+@router.post('/password/change-with-credentials', status_code=status.HTTP_204_NO_CONTENT)
+def change_password_with_credentials(payload: CredentialPasswordChangeRequest) -> None:
+    """Change a password without being signed in, proving it is you with the
+    current one.
+
+    The counterpart to /password/change above, for the sign-in screen. No bearer
+    token, because the current password IS the proof of ownership — the
+    authenticated endpoint takes the email from the token purely as a
+    convenience, not as a second factor. So this grants nobody anything they
+    could not already do: whoever knows the email and password can sign in and
+    change it from inside the app.
+
+    Deliberately app-neutral. Broker Tools' own login refuses anyone without a
+    broker_tools role, so a CMS-only user can never reach the in-app version of
+    this. They still need to be able to change the password they share between
+    both apps, and this is where they do it.
+
+    Two things follow from being unauthenticated, and neither is optional:
+
+      * The SAME per-email rate limit as login. Without it this is a second
+        password oracle, and one that is not behind the throttle everybody
+        remembers to check.
+      * Login's generic failure message, not the authenticated endpoint's "that
+        is not your current password". With an email field in the form, the
+        specific message would confirm which addresses have accounts — an
+        enumeration vector /v1/auth/login deliberately does not have.
+    """
+    email = payload.email.strip().lower()
+    _rate_limit(email)
+
+    try:
+        session = supabase_client.sign_in_with_password(email, payload.current_password)
+    except supabase_client.InvalidCredentials:
+        # Same fall-through as login, so anyone who can sign in can also change
+        # their password. Dormant unless LEGACY_MIGRATION_ENABLED is on, and the
+        # cohort it covers — CMS accounts still on a Django hash — is exactly
+        # the one that has to use this screen rather than the in-app one.
+        session = _try_legacy_login(email, payload.current_password)
+        if session is None:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, 'invalid email or password'
+            ) from None
+    except supabase_client.SupabaseError as exc:
+        raise HTTPException(exc.status_code, exc.message) from exc
+
+    response = _session_response(session)
+    if not response['user']['is_active']:
+        # Matches login. A deactivated account cannot sign in, so letting it
+        # change its password would only be a way to keep the credential warm.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, 'account is not active')
+
+    supabase_client.admin_set_password(response['user']['user_id'], payload.new_password)
+    # Including the session just minted to verify the old password.
+    supabase_client.admin_sign_out_everywhere(response['user']['user_id'])
 
 
 @router.post('/password/reset-request', status_code=status.HTTP_202_ACCEPTED)

@@ -117,11 +117,25 @@ CORS_ORIGINS = [
 ]
 
 # ── Tunables ─────────────────────────────────────────────────────────────────
-# 30 minutes, down from the 8 hours both projects used. Roles ride in the JWT and
-# consumers cache for 60s, so a short access token is what bounds how long a
-# revoked role stays usable. Set on the Supabase project, not here; this value is
-# reported to clients so they can schedule refreshes.
-ACCESS_TOKEN_TTL_SECONDS = _int('ACCESS_TOKEN_TTL_SECONDS', 1800)
+# 7 days, up from 30 minutes, so nobody has to sign in twice a day. 604800 is
+# Supabase's ceiling for this setting — 10 days was asked for and cannot be
+# configured. Set on the Supabase project (Authentication → Sessions), not here;
+# this value only mirrors it so clients can report the expiry and schedule
+# refreshes. Changing it here alone changes nothing.
+#
+# The cost is revocation latency, and it is not small. Both `roles` and
+# `is_active` are read from the token's claims — /v1/introspect does no I/O by
+# design — so an access token already in a browser keeps the roles it was minted
+# with until it expires. Revoking sessions kills refresh tokens at once, but
+# nothing here can recall an issued JWT: not a role change, not deactivation,
+# not a password reset. At 30 minutes that window was a nuisance. At 7 days,
+# offboarding is not immediate and should not be assumed to be.
+#
+# The only way to invalidate live access tokens is to rotate the Supabase
+# project's JWT signing key, which signs everyone out at once. If eviction ever
+# needs to be quicker than this without that hammer, the fix is a short access
+# token plus a client refresh loop — see the revocation section in README.md.
+ACCESS_TOKEN_TTL_SECONDS = _int('ACCESS_TOKEN_TTL_SECONDS', 604800)
 
 HTTP_TIMEOUT_SECONDS = _int('HTTP_TIMEOUT_SECONDS', 10)
 
