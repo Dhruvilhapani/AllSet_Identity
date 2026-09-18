@@ -78,10 +78,10 @@ Broker Tools' FastAPI service actually gets *faster*: it currently forwards ever
 request to Django's `/api/auth/verify/`, and that hop is replaced, not added to.
 
 **Revocation.** Because roles ride in the JWT and are cached for 60s, a role
-change takes up to 60s plus the remaining access-token lifetime to bite. Two
-mitigations: keep the access-token lifetime short (set it in Authentication ->
-Sessions; Supabase defaults to 3600s), and every role change or deactivation
-revokes the user's sessions so refresh tokens die immediately.
+change takes up to 60s plus the remaining access-token lifetime to bite. Every
+role change, deactivation and admin password reset revokes the user's sessions,
+which kills their refresh tokens immediately — but it cannot recall an access
+token already sitting in a browser.
 
 That revocation goes through the `identity_revoke_user_sessions` RPC, not a
 GoTrue endpoint. GoTrue has no admin logout: `POST /admin/users/{id}/logout`
@@ -89,6 +89,31 @@ does not exist, and `POST /logout?scope=global` needs the user's own access
 token. Both verified against a live project. If `db/003_revoke_sessions.sql`
 has not been applied, role changes fail loudly rather than reporting success
 while the old role keeps working.
+
+That last point — an issued access token cannot be recalled — now matters a great
+deal more than it used to. The access-token lifetime was raised from 30 minutes
+to **7 days** so people stop being signed out several times a day, and the
+consequence is that **a removed role or a deactivated account can keep working
+for up to 7 days**.
+
+Be precise about why, because it is easy to assume otherwise: both `roles` and
+`is_active` are read from the token's claims, since `/v1/introspect` does no I/O
+by design. So nothing in this service can recall an access token that has already
+been issued — not a role change, not deactivation, and not a password reset.
+Those all revoke *sessions*, which stops the holder getting a **new** token; the
+one already in their browser keeps working until it expires.
+
+**Offboarding is therefore not immediate.** Clear their roles and deactivate them
+as usual, and understand that it takes effect when their current access token
+expires. The only way to invalidate live tokens sooner is to rotate the Supabase
+project's JWT signing key, which signs every user out at once.
+
+7 days is Supabase's ceiling for this setting, not a chosen number — 604800
+seconds is the maximum the dashboard accepts. The alternative that avoids the
+tradeoff entirely is a short access token plus a refresh loop in the clients;
+the CMS admin panel already has one (`src/api/client.ts` retries on 401), Broker
+Tools' web app does not. If the revocation window ever becomes a problem, wiring
+refresh into Broker Tools and dropping this back to an hour is the fix.
 
 ## Endpoints
 
@@ -100,8 +125,9 @@ while the old role keeps working.
 | POST | `/v1/auth/refresh` | Refuses a deactivated account. |
 | POST | `/v1/auth/logout` | |
 | GET | `/v1/auth/me` | |
-| POST | `/v1/auth/password/change` | Re-verifies the current password first. |
-| POST | `/v1/auth/password/reset-request` | Always reports success, so it cannot enumerate the roster. |
+| POST | `/v1/auth/password/change` | Self-service, signed in. Re-verifies the current password first, then revokes the user's other sessions. |
+| POST | `/v1/auth/password/change-with-credentials` | Self-service, **not** signed in — email + current password + new. Behind login's per-email throttle, and answers with login's generic message. |
+| POST | `/v1/auth/password/reset-request` | Always reports success, so it cannot enumerate the roster. Nothing handles the emailed link yet — see below. |
 | GET | `/v1/auth/roles` | The role vocabulary, for populating role pickers. |
 
 **Service-facing** — requires `X-Allset-Service-Key`:
@@ -113,12 +139,13 @@ while the old role keeps working.
 
 **Admin** — requires `admin` or `tech`:
 
-| Method | Path |
-|---|---|
-| GET, POST | `/v1/admin/users` |
-| PATCH | `/v1/admin/users/{id}/roles` |
-| PATCH | `/v1/admin/users/{id}/status` |
-| POST | `/v1/admin/users/{id}/reset-password` |
+| Method | Path | Notes |
+|---|---|---|
+| GET, POST | `/v1/admin/users` | |
+| PATCH | `/v1/admin/users/{id}/roles` | Revokes the target's sessions. |
+| PATCH | `/v1/admin/users/{id}/status` | Revokes the target's sessions on deactivation. |
+| POST | `/v1/admin/users/{id}/reset-password` | Emails a set-password link. |
+| POST | `/v1/admin/users/{id}/set-password` | Sets a password outright, no old password needed. Revokes the target's sessions. |
 
 ### The introspect status-code contract
 
@@ -139,7 +166,7 @@ uvicorn app.main:app --reload --port 8100
 ```
 
 ```bash
-pytest -q          # 162 tests, no network access needed
+pytest -q          # 206 tests, no network access needed
 ruff check .
 ```
 
@@ -205,7 +232,11 @@ rather than stubbed.
 4. **Disable email confirmation**: Authentication → Sign In / Providers →
    *Confirm email: off*. Email + password is the only enabled method.
 
-5. **Set the access token lifetime** to 30 minutes: Authentication → Sessions.
+5. **Set the access token lifetime** to 604800 seconds (7 days):
+   Authentication → Sessions. This is the authoritative setting;
+   `ACCESS_TOKEN_TTL_SECONDS` only mirrors it for reporting. 604800 is the
+   maximum the dashboard accepts. Read the revocation note above before
+   changing it — it is what bounds how long a removed role stays usable.
 
 6. **Configure the environment** — see `.env.example`. `ALLSET_SERVICE_KEY` must
    match the value set on every consuming service.
@@ -225,21 +256,66 @@ rather than stubbed.
    Each new account is emailed a set-password link and chooses its own
    password. This retires the hardcoded `Allset@2024` seeds.
 
-   **Known gap:** there is no page for that link to land on yet. Neither admin
-   UI has a `/reset-password` route and this service has no
-   `/password/reset-confirm`, so the emailed link currently redirects to the
-   project's Site URL and nothing completes the flow. Until that is built, use
-   `scripts/set_password.py` for the first admin and for anyone who cannot get
-   in:
-
-   ```bash
-   python scripts/set_password.py krips@allset.in
-   ```
-
-   It prompts twice, echoes nothing, verifies the sign-in afterwards, and needs
-   no existing session. Also note Supabase's built-in mail service is
+   **Known gap:** there is still no page for that emailed link to land on.
+   Neither admin UI has a `/reset-password` route and this service has no
+   `/password/reset-confirm`, so the link redirects to the project's Site URL
+   and nothing completes the flow. Supabase's built-in mailer is also
    rate-limited to a few messages an hour and is not meant for production, so a
-   burst of invites stops being delivered without reporting an error.
+   burst of invites stops being delivered without reporting an error. Treat the
+   invite email as unreliable and set the password yourself.
+
+## Passwords
+
+Three paths, for three different situations:
+
+| Situation | Use |
+|---|---|
+| You know your password and want a new one | Broker Tools, either the **key icon in the sidebar** once signed in, or **Change your password** on the sign-in screen. Both ask for the current password; no email or OTP involved. |
+| Someone has forgotten theirs entirely | `scripts/admin_set_password.py` — runs as you, needs admin or tech, no service-role key. |
+| Nobody can log in at all | `scripts/set_password.py` — straight to Supabase with the service-role key. The bootstrap path for the first admin, and the one that still works when this service is down. |
+
+**Password UI lives only in Broker Tools.** The CMS admin panel signs in with the
+same unified credentials and has no password screen, deliberately — one place to
+change a password rather than two that can drift. That is also why the sign-in
+screen carries a change-password flow at all: Broker Tools' own login refuses
+anyone without a `broker_tools` role, so a CMS-only user (`editor`, `viewer`,
+`manager`) can never reach the in-app version. They open Broker Tools' sign-in
+page, change the password there, and go back to the CMS to use it.
+
+The signed-out endpoint is unauthenticated and accepts a password, which buys it
+two obligations it must never lose:
+
+- the **same per-email throttle as login**, sharing one budget rather than
+  handing an attacker a second allowance for free
+- **login's generic failure message**. The form carries an email field, so a
+  message specific to the current password would confirm which addresses have
+  accounts — something `/v1/auth/login` deliberately never reveals
+
+It grants nobody a capability they lacked: anyone who knows the email and
+password can already sign in and change it from inside the app.
+
+```bash
+# as an admin, for a colleague who forgot theirs
+python scripts/admin_set_password.py darshil@allset.in
+
+# bootstrap, or when you cannot log in yourself
+python scripts/set_password.py krips@allset.in
+```
+
+Both prompt twice, echo nothing, and never take the password as an argument, so
+it stays out of shell history. `admin_set_password.py` goes through
+`/v1/admin/users/{id}/set-password`, so the reset is attributable to you in the
+service logs; `set_password.py` bypasses the service entirely and leaves no such
+record, which is the reason to prefer the first where both would work.
+
+Either way the target is signed out of every session, deliberately — with a
+7-day access token, a reset that left the old sessions alive would not have
+recovered the account. Hand the new password over privately and have them change
+it themselves afterwards.
+
+Changing your own password via `/v1/auth/password/change` re-verifies the
+current one first, so a stolen access token on its own cannot lock the owner
+out, and it revokes your other sessions on the way through.
 
 ## Shadow migration of CMS passwords
 
