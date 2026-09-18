@@ -40,6 +40,12 @@ class UpdateStatusRequest(BaseModel):
     is_active: bool
 
 
+class SetPasswordRequest(BaseModel):
+    # Same floor as /v1/auth/password/change, so an admin-set password cannot be
+    # weaker than one the owner would be allowed to choose themselves.
+    new_password: str = Field(min_length=10, max_length=256)
+
+
 def _validated(roles: list[str]) -> list[str]:
     try:
         return capabilities.validate_roles(roles)
@@ -161,9 +167,9 @@ def update_status(
 def admin_reset_password(user_id: str) -> dict:
     """Send a set-password email on a user's behalf.
 
-    The admin never sees or chooses the password — this is the supported way to
-    help someone who is locked out, rather than setting a temporary password and
-    sending it over chat.
+    The admin never sees or chooses the password, which makes this the better of
+    the two recovery paths where it works. It needs the emailed link to land
+    somewhere, and today it does not — see the note on set_password below.
     """
     profile = profiles.get_by_user_id(user_id)
     if profile is None:
@@ -171,3 +177,40 @@ def admin_reset_password(user_id: str) -> dict:
 
     supabase_client.send_recovery_email(profile['email'])
     return {'detail': 'password reset email sent'}
+
+
+@router.post('/users/{user_id}/set-password', status_code=status.HTTP_204_NO_CONTENT)
+def set_password(
+    user_id: str,
+    payload: SetPasswordRequest,
+    caller: Caller = Depends(require_global_admin),
+) -> None:
+    """Set a user's password outright, without their current one.
+
+    The counterpart to /v1/auth/password/change: that endpoint is how people
+    change their own password and requires the old one, which is no help to
+    somebody who has forgotten it. reset-password above is the path that avoids
+    an admin ever knowing the password, but the emailed link has nowhere to land
+    yet and Supabase's built-in mailer is rate-limited to a few messages an hour
+    and silently stops delivering. So this exists for real lockouts.
+
+    Unlike scripts/set_password.py, which reaches Supabase directly with the
+    service-role key, this runs as an authenticated admin. That is the point:
+    the reset is attributable, and helping someone back in does not require
+    handing out the key that can act as any user in the project.
+
+    Sessions are revoked afterwards, on the same reasoning as a role change —
+    whoever knew the old password may still hold a live session, and a reset
+    that leaves them signed in has not actually recovered the account. Resetting
+    your own password therefore signs you out too, including the session making
+    this request.
+    """
+    profile = profiles.get_by_user_id(user_id)
+    if profile is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, 'user not found')
+
+    supabase_client.admin_set_password(user_id, payload.new_password)
+    # Raises if revocation fails, rather than reporting a success that left the
+    # old sessions alive. See admin_sign_out_everywhere.
+    supabase_client.admin_sign_out_everywhere(user_id)
+    logger.info('password set for %s by %s', user_id, caller.user_id)
