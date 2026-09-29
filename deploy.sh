@@ -8,8 +8,15 @@
 #   1. cp .env.example .env.dev, then fill in real values (Supabase call_logs
 #      project keys, ALLSET_SERVICE_KEY). For prod: .env.prod instead.
 #   2. ./scripts/setup_gcp_secrets.sh <dev|prod>   — enables APIs, creates the
-#      Artifact Registry repo, and syncs secrets from the target's env file
-#      into that target's project in Secret Manager.
+#      Artifact Registry repo, syncs secrets from the target's env file into
+#      that target's project in Secret Manager, and creates the runtime
+#      service account identity-run@<project> with access to those secrets.
+#
+# The service runs as identity-run@<project>.iam.gserviceaccount.com (not the
+# default compute SA). This script aborts before building if that account is
+# missing or can't read a secret it is about to bind. The deploying user needs
+# iam.serviceAccounts.actAs on it (roles/iam.serviceAccountUser; owner/editor
+# include it).
 #
 # deploy/env.yaml (the non-secret Cloud Run env vars) is generated
 # automatically from the target's .env file every time this script runs —
@@ -23,7 +30,7 @@
 #   DEPLOY_CONFIRM=allset-244ab ./deploy.sh prod   # non-interactive prod
 #   REGION=us-central1 PROJECT_ID=my-project ./deploy.sh dev
 #
-# PROJECT_ID/REGION/REPO_NAME/SERVICE_NAME/ENV_FILE overrides are honoured for
+# PROJECT_ID/REGION/REPO_NAME/SERVICE_NAME/ENV_FILE/RUNTIME_SA overrides are honoured for
 # dev only; prod aborts if any of them is set to something other than the prod
 # default, so a stray shell export can't redirect a prod deploy.
 #
@@ -67,6 +74,8 @@ DEFAULT_REGION="asia-south1"
 DEFAULT_REPO_NAME="allset-identity"
 DEFAULT_SERVICE_NAME="allset-identity"
 DEFAULT_ENV_FILE="$SCRIPT_DIR/$DEFAULT_ENV_BASENAME"
+RUNTIME_SA_ID="identity-run"
+DEFAULT_RUNTIME_SA="${RUNTIME_SA_ID}@${DEFAULT_PROJECT_ID}.iam.gserviceaccount.com"
 
 # Prod must deploy exactly the prod service in the prod project from .env.prod.
 # Overrides stay available for dev, but a leftover `export PROJECT_ID=...` (or
@@ -75,7 +84,7 @@ if [[ "$TARGET" == "prod" ]]; then
   prod_override_error=false
   for pair in "PROJECT_ID=$DEFAULT_PROJECT_ID" "REGION=$DEFAULT_REGION" \
               "REPO_NAME=$DEFAULT_REPO_NAME" "SERVICE_NAME=$DEFAULT_SERVICE_NAME" \
-              "ENV_FILE=$DEFAULT_ENV_FILE"; do
+              "ENV_FILE=$DEFAULT_ENV_FILE" "RUNTIME_SA=$DEFAULT_RUNTIME_SA"; do
     var="${pair%%=*}"
     expected="${pair#*=}"
     actual="${!var-}"
@@ -119,6 +128,9 @@ REPO_NAME="${REPO_NAME:-$DEFAULT_REPO_NAME}"
 SERVICE_NAME="${SERVICE_NAME:-$DEFAULT_SERVICE_NAME}"
 ENV_FILE="${ENV_FILE:-$DEFAULT_ENV_FILE}"
 ENV_VARS_FILE="$SCRIPT_DIR/$DEFAULT_ENV_VARS_BASENAME"
+# Derived from the (possibly dev-overridden) PROJECT_ID; must match
+# scripts/setup_gcp_secrets.sh.
+RUNTIME_SA="${RUNTIME_SA:-${RUNTIME_SA_ID}@${PROJECT_ID}.iam.gserviceaccount.com}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing $ENV_FILE — copy .env.example and fill in real values first." >&2
@@ -271,8 +283,76 @@ if [[ -n "$MISSING_REQUIRED" ]]; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Runtime service account preflight. A revision whose SA is missing, or can't
+# read one of its bound secrets, never becomes ready - catch that before the
+# build. Only IAM policy names/members are read, never secret values.
+# ---------------------------------------------------------------------------
+SA_ERR=""
+if ! SA_ERR="$(gcloud iam service-accounts describe "$RUNTIME_SA" --project="$PROJECT_ID" \
+    --format='value(email)' 2>&1 >/dev/null)"; then
+  if printf '%s' "$SA_ERR" | grep -q 'NOT_FOUND'; then
+    echo "ERROR: runtime service account $RUNTIME_SA does not exist in $PROJECT_ID." >&2
+  else
+    echo "ERROR: could not look up runtime service account $RUNTIME_SA:" >&2
+    printf '%s\n' "$SA_ERR" | sed 's/^/         /' >&2
+  fi
+  echo "       Run scripts/setup_gcp_secrets.sh $TARGET first." >&2
+  exit 1
+fi
+
+# Prints "role<TAB>member" lines; aborts on any lookup error.
+iam_bindings() {
+  local out err_file
+  err_file="$(mktemp)"
+  if ! out="$(gcloud "$@" --flatten='bindings[].members' \
+      --format='value(bindings.role,bindings.members)' 2>"$err_file")"; then
+    echo "ERROR: could not read IAM policy (gcloud $1 $2 $3):" >&2
+    sed 's/^/         /' "$err_file" >&2
+    rm -f "$err_file"
+    exit 1
+  fi
+  rm -f "$err_file"
+  printf '%s\n' "$out"
+}
+
+grants_accessor() {
+  awk -v m="serviceAccount:${RUNTIME_SA}" \
+    '$1 == "roles/secretmanager.secretAccessor" && $2 == m { found = 1 } END { exit !found }'
+}
+
+# setup_gcp_secrets.sh grants per secret. A project-level grant (e.g. a dev
+# RUNTIME_SA override pointing at the compute SA) also counts; it is read at
+# most once, and only if some secret lacks a secret-level grant.
+PROJECT_BINDINGS=""
+PROJECT_BINDINGS_READ=false
+NO_ACCESS=""
+for binding in ${SECRETS//,/ }; do
+  secret_name="${binding#*=}"
+  secret_name="${secret_name%%:*}"
+  bindings="$(iam_bindings secrets get-iam-policy "$secret_name" --project="$PROJECT_ID")"
+  if printf '%s\n' "$bindings" | grants_accessor; then
+    continue
+  fi
+  if [[ "$PROJECT_BINDINGS_READ" != "true" ]]; then
+    PROJECT_BINDINGS="$(iam_bindings projects get-iam-policy "$PROJECT_ID")"
+    PROJECT_BINDINGS_READ=true
+  fi
+  if printf '%s\n' "$PROJECT_BINDINGS" | grants_accessor; then
+    continue
+  fi
+  NO_ACCESS+=" $secret_name"
+done
+
+if [[ -n "$NO_ACCESS" ]]; then
+  echo "ERROR: $RUNTIME_SA lacks roles/secretmanager.secretAccessor on:$NO_ACCESS" >&2
+  echo "       Run scripts/setup_gcp_secrets.sh $TARGET first." >&2
+  exit 1
+fi
+
 echo "==> Project: $PROJECT_ID"
 echo "==> Region:  $REGION"
+echo "==> Runtime SA: $RUNTIME_SA"
 echo "==> Image:   $IMAGE"
 echo "==> Secrets: ${SECRETS//,/ }"
 echo
@@ -330,6 +410,7 @@ DEPLOY_ARGS=(
   --concurrency=40
   --memory=512Mi
   --allow-unauthenticated
+  --service-account="$RUNTIME_SA"
 )
 if [[ -n "$SECRETS" ]]; then
   DEPLOY_ARGS+=(--set-secrets="$SECRETS")
