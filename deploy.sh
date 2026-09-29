@@ -18,8 +18,17 @@
 #
 # Usage:
 #   ./deploy.sh dev              # dev/staging (allset-491218), reads .env.dev
-#   ./deploy.sh prod             # prod (allset-244ab), reads .env.prod
+#   ./deploy.sh prod             # prod (allset-244ab), reads .env.prod; asks
+#                                # you to type the project id to confirm
+#   DEPLOY_CONFIRM=allset-244ab ./deploy.sh prod   # non-interactive prod
 #   REGION=us-central1 PROJECT_ID=my-project ./deploy.sh dev
+#
+# PROJECT_ID/REGION/REPO_NAME/SERVICE_NAME/ENV_FILE overrides are honoured for
+# dev only; prod aborts if any of them is set to something other than the prod
+# default, so a stray shell export can't redirect a prod deploy.
+#
+# Paths are resolved from this script's location, so it can be run from any
+# working directory.
 #
 # Run ./scripts/setup_gcp_secrets.sh <dev|prod> once before the first deploy of
 # a given target — it bootstraps APIs/Artifact Registry/Secret Manager for
@@ -54,6 +63,33 @@ esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+DEFAULT_REGION="asia-south1"
+DEFAULT_REPO_NAME="allset-identity"
+DEFAULT_SERVICE_NAME="allset-identity"
+DEFAULT_ENV_FILE="$SCRIPT_DIR/$DEFAULT_ENV_BASENAME"
+
+# Prod must deploy exactly the prod service in the prod project from .env.prod.
+# Overrides stay available for dev, but a leftover `export PROJECT_ID=...` (or
+# REGION, ...) from another session must never silently redirect a prod run.
+if [[ "$TARGET" == "prod" ]]; then
+  prod_override_error=false
+  for pair in "PROJECT_ID=$DEFAULT_PROJECT_ID" "REGION=$DEFAULT_REGION" \
+              "REPO_NAME=$DEFAULT_REPO_NAME" "SERVICE_NAME=$DEFAULT_SERVICE_NAME" \
+              "ENV_FILE=$DEFAULT_ENV_FILE"; do
+    var="${pair%%=*}"
+    expected="${pair#*=}"
+    actual="${!var-}"
+    if [[ -n "$actual" && "$actual" != "$expected" ]]; then
+      echo "Refusing prod deploy: $var is set to '$actual' in your shell, but prod requires '$expected'." >&2
+      prod_override_error=true
+    fi
+  done
+  if [[ "$prod_override_error" == "true" ]]; then
+    echo "Unset the variable(s) above (e.g. 'unset PROJECT_ID') and re-run ./deploy.sh prod." >&2
+    exit 1
+  fi
+fi
+
 # Deployments must correspond to a recorded Git revision. Set
 # ALLOW_DIRTY_DEPLOY=true only for an intentional emergency build from local
 # changes; the image tag still records the current commit when available.
@@ -78,17 +114,10 @@ fi
 # Config — override via env vars if needed
 # ---------------------------------------------------------------------------
 PROJECT_ID="${PROJECT_ID:-$DEFAULT_PROJECT_ID}"
-REGION="${REGION:-asia-south1}"
-REPO_NAME="${REPO_NAME:-allset-identity}"
-SERVICE_NAME="${SERVICE_NAME:-allset-identity}"
-
-if [[ -z "$PROJECT_ID" ]]; then
-  echo "PROJECT_ID is not set and no default gcloud project is configured." >&2
-  echo "Run: gcloud config set project <your-project-id>, or PROJECT_ID=<id> $0" >&2
-  exit 1
-fi
-
-ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/$DEFAULT_ENV_BASENAME}"
+REGION="${REGION:-$DEFAULT_REGION}"
+REPO_NAME="${REPO_NAME:-$DEFAULT_REPO_NAME}"
+SERVICE_NAME="${SERVICE_NAME:-$DEFAULT_SERVICE_NAME}"
+ENV_FILE="${ENV_FILE:-$DEFAULT_ENV_FILE}"
 ENV_VARS_FILE="$SCRIPT_DIR/$DEFAULT_ENV_VARS_BASENAME"
 
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -127,7 +156,10 @@ mkdir -p "$SCRIPT_DIR/deploy"
   # os.environ.get(key, derived_default), which only fires when the key is
   # absent from the environment. An explicit empty string suppresses that
   # derivation and crashes the app at startup (confirmed against a real deploy).
-  for key in SUPABASE_URL SUPABASE_JWT_SECRET SUPABASE_JWKS_URL SUPABASE_JWT_ISSUER \
+  # Secrets (anon/service-role keys, ALLSET_SERVICE_KEY, SUPABASE_JWT_SECRET,
+  # LEGACY_CMS_DB_PASSWORD) never go in here — they are bound from Secret
+  # Manager below.
+  for key in SUPABASE_URL SUPABASE_JWKS_URL SUPABASE_JWT_ISSUER \
              SUPABASE_JWT_AUDIENCE LEGACY_MIGRATION_ENABLED LEGACY_CMS_DB_HOST \
              LEGACY_CMS_DB_PORT LEGACY_CMS_DB_NAME LEGACY_CMS_DB_USER LEGACY_CMS_DB_SSLMODE \
              CORS_ORIGINS HTTP_TIMEOUT_SECONDS ACCESS_TOKEN_TTL_SECONDS \
@@ -139,35 +171,141 @@ mkdir -p "$SCRIPT_DIR/deploy"
 } > "$ENV_VARS_FILE"
 
 # ---------------------------------------------------------------------------
-# Build --set-secrets from whatever identity-* secrets actually exist in
-# Secret Manager, so one not-yet-created secret (e.g. run before
-# setup_gcp_secrets.sh has a value for it) doesn't hard-fail the whole deploy.
+# Plain env vars the app refuses to boot without (app/core/config.py validate())
 # ---------------------------------------------------------------------------
-secret_exists() {
-  gcloud secrets describe "$1" --project="$PROJECT_ID" &>/dev/null
+is_truthy() {
+  # Mirrors config._flag(): 1/true/yes/on, case-insensitive (no ${v,,} — bash 3.2)
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
+LEGACY_ENABLED=false
+if is_truthy "$(read_env_var LEGACY_MIGRATION_ENABLED)"; then
+  LEGACY_ENABLED=true
+fi
+
+REQUIRED_PLAIN_VARS="SUPABASE_URL"
+if [[ "$LEGACY_ENABLED" == "true" ]]; then
+  REQUIRED_PLAIN_VARS+=" LEGACY_CMS_DB_HOST LEGACY_CMS_DB_USER"
+fi
+for key in $REQUIRED_PLAIN_VARS; do
+  if [[ -z "$(read_env_var "$key")" ]]; then
+    echo "ERROR: $key is empty in $(basename "$ENV_FILE") but the service requires it at startup." >&2
+    exit 1
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# Build --set-secrets from Secret Manager.
+#
+# --set-secrets REPLACES every secret binding on the service, so a binding we
+# leave out here is removed from the live service. Therefore:
+#   * a secret the app requires at startup must exist, or we abort;
+#   * an optional secret that is genuinely NOT_FOUND is skipped with a warning;
+#   * any other lookup error (permission denied, network, auth) aborts rather
+#     than being mistaken for "not found".
+# ---------------------------------------------------------------------------
+# Returns 0 if the secret exists, 1 if Secret Manager says NOT_FOUND, and
+# aborts the script on any other error.
+secret_exists() {
+  local err
+  if err="$(gcloud secrets describe "$1" --project="$PROJECT_ID" --format='value(name)' 2>&1 >/dev/null)"; then
+    return 0
+  fi
+  if printf '%s' "$err" | grep -q 'NOT_FOUND'; then
+    return 1
+  fi
+  echo "ERROR: could not look up secret '$1' in project $PROJECT_ID (not a NOT_FOUND):" >&2
+  printf '%s\n' "$err" | sed 's/^/         /' >&2
+  echo "       Aborting so the binding isn't silently dropped from the live service." >&2
+  exit 1
+}
+
+# TARGET_ENV_VAR=secret-name pairs. Must stay in sync with
+# scripts/setup_gcp_secrets.sh.
 SECRET_PAIRS="SUPABASE_ANON_KEY=identity-supabase-anon-key"
 SECRET_PAIRS+=" SUPABASE_SERVICE_ROLE_KEY=identity-supabase-service-role-key"
 SECRET_PAIRS+=" ALLSET_SERVICE_KEY=identity-allset-service-key"
+SECRET_PAIRS+=" SUPABASE_JWT_SECRET=identity-supabase-jwt-secret"
 SECRET_PAIRS+=" LEGACY_CMS_DB_PASSWORD=identity-legacy-cms-db-password"
 
+# Required at startup by config.validate(). LEGACY_CMS_DB_PASSWORD becomes
+# required when LEGACY_MIGRATION_ENABLED is on; SUPABASE_JWT_SECRET (HS256
+# verification for legacy-signed projects, security.py) is required whenever
+# the env file sets it, so moving it off plain env vars can't silently drop it.
+REQUIRED_SECRET_VARS="SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY ALLSET_SERVICE_KEY"
+if [[ "$LEGACY_ENABLED" == "true" ]]; then
+  REQUIRED_SECRET_VARS+=" LEGACY_CMS_DB_PASSWORD"
+fi
+if [[ -n "$(read_env_var SUPABASE_JWT_SECRET)" ]]; then
+  REQUIRED_SECRET_VARS+=" SUPABASE_JWT_SECRET"
+fi
+
+is_required_secret() {
+  case " $REQUIRED_SECRET_VARS " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 SECRETS=""
+MISSING_REQUIRED=""
 for pair in $SECRET_PAIRS; do
   target="${pair%%=*}"
   secret_name="${pair#*=}"
   if secret_exists "$secret_name"; then
     SECRETS+="${SECRETS:+,}${target}=${secret_name}:latest"
+  elif is_required_secret "$target"; then
+    MISSING_REQUIRED+=" $secret_name"
   else
-    echo "WARNING: secret '$secret_name' not found in Secret Manager — skipping $target." >&2
+    echo "WARNING: optional secret '$secret_name' not found in Secret Manager — skipping $target." >&2
     echo "         Run ./scripts/setup_gcp_secrets.sh $TARGET after adding its value to $(basename "$ENV_FILE") to include it." >&2
   fi
 done
 
+if [[ -n "$MISSING_REQUIRED" ]]; then
+  echo "ERROR: required secret(s) missing from Secret Manager in $PROJECT_ID:$MISSING_REQUIRED" >&2
+  echo "       The service cannot start without them. Run ./scripts/setup_gcp_secrets.sh $TARGET first." >&2
+  exit 1
+fi
+
 echo "==> Project: $PROJECT_ID"
 echo "==> Region:  $REGION"
 echo "==> Image:   $IMAGE"
+echo "==> Secrets: ${SECRETS//,/ }"
 echo
+
+# ---------------------------------------------------------------------------
+# Prod needs a typed confirmation of the project id. Non-interactive runs must
+# pass DEPLOY_CONFIRM=<exact project id>; anything else aborts.
+# ---------------------------------------------------------------------------
+if [[ "$TARGET" == "prod" ]]; then
+  if [[ -n "${DEPLOY_CONFIRM:-}" ]]; then
+    if [[ "$DEPLOY_CONFIRM" != "$DEFAULT_PROJECT_ID" ]]; then
+      echo "DEPLOY_CONFIRM='$DEPLOY_CONFIRM' does not match the prod project id '$DEFAULT_PROJECT_ID' — aborting." >&2
+      exit 1
+    fi
+    echo "==> Prod deploy confirmed via DEPLOY_CONFIRM."
+  elif [[ -t 0 ]]; then
+    read -r -p "Type the prod project id ($DEFAULT_PROJECT_ID) to deploy: " reply
+    if [[ "$reply" != "$DEFAULT_PROJECT_ID" ]]; then
+      echo "Confirmation did not match — aborting prod deploy." >&2
+      exit 1
+    fi
+  else
+    echo "Refusing prod deploy without confirmation: no TTY to prompt on." >&2
+    echo "Re-run with DEPLOY_CONFIRM=$DEFAULT_PROJECT_ID ./deploy.sh prod" >&2
+    exit 1
+  fi
+fi
+
+# Remember the currently serving revision (if any) for the rollback hint below.
+# Best-effort only: a first deploy has no service yet.
+PREVIOUS_REVISION="$(gcloud run services describe "$SERVICE_NAME" \
+  --project="$PROJECT_ID" --region="$REGION" \
+  --format='value(status.latestReadyRevisionName)' 2>/dev/null || true)"
 
 # ---------------------------------------------------------------------------
 # Build + push the image via Cloud Build (no local Docker daemon required)
@@ -198,8 +336,53 @@ if [[ -n "$SECRETS" ]]; then
 fi
 gcloud run deploy "$SERVICE_NAME" "${DEPLOY_ARGS[@]}"
 
-SERVICE_URL="$(gcloud run services describe "$SERVICE_NAME" \
-  --project="$PROJECT_ID" --region="$REGION" --format='value(status.url)')"
+# ---------------------------------------------------------------------------
+# Post-deploy verification
+# ---------------------------------------------------------------------------
+rollback_hint() {
+  if [[ -n "$PREVIOUS_REVISION" && "$PREVIOUS_REVISION" != "${READY_REVISION:-}" ]]; then
+    echo "       To roll back: gcloud run services update-traffic $SERVICE_NAME --project=$PROJECT_ID --region=$REGION --to-revisions=$PREVIOUS_REVISION=100" >&2
+  fi
+}
+
+service_field() {
+  gcloud run services describe "$SERVICE_NAME" \
+    --project="$PROJECT_ID" --region="$REGION" --format="value($1)"
+}
+# Separate calls: an empty field in one multi-field `value()` line would shift
+# the others when split on whitespace.
+SERVICE_URL="$(service_field status.url)"
+READY_REVISION="$(service_field status.latestReadyRevisionName)"
+CREATED_REVISION="$(service_field status.latestCreatedRevisionName)"
+
+if [[ -z "$SERVICE_URL" || -z "$CREATED_REVISION" || "$READY_REVISION" != "$CREATED_REVISION" ]]; then
+  echo "ERROR: latest created revision '${CREATED_REVISION:-?}' is not the latest ready revision '${READY_REVISION:-?}'." >&2
+  echo "       The new revision did not become ready; check its logs in Cloud Run." >&2
+  rollback_hint
+  exit 1
+fi
+echo "==> Revision ready: $READY_REVISION"
+
+# /health is liveness; /v1/auth/roles and /identity/v1/auth/roles are public,
+# no-I/O routes that prove both router mounts are live. The /identity/v1 mount
+# is what Firebase Hosting's /identity/** rewrite hits (it doesn't strip the
+# prefix) — losing it breaks every browser login.
+VERIFY_FAILED=false
+for path in /health /v1/auth/roles /identity/v1/auth/roles; do
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "${SERVICE_URL}${path}" 2>/dev/null)" || code="${code:-000}"
+  if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then
+    echo "==> GET $path -> $code"
+  else
+    echo "ERROR: GET ${SERVICE_URL}${path} returned ${code:-000} (expected 2xx)." >&2
+    VERIFY_FAILED=true
+  fi
+done
+
+if [[ "$VERIFY_FAILED" == "true" ]]; then
+  echo "ERROR: post-deploy checks failed — revision $READY_REVISION is serving traffic." >&2
+  rollback_hint
+  exit 1
+fi
 
 echo
-echo "==> Deployed: $SERVICE_URL"
+echo "==> Deployed: $SERVICE_URL ($READY_REVISION)"
