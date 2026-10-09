@@ -33,6 +33,11 @@ So `{sales, viewer}` means own-leads in Broker Tools plus read-only CMS, and
 `{manager, sales}` means CMS editor-level plus own-leads — not all leads, which
 is why `manager` and `lead_manager` are separate roles.
 
+Consultation Agent has its own `consultation_agent` capability block, carrying
+only `access` and `primary_role`. It is granted to exactly the Broker Tools
+roles, and is a separate block so the two can diverge later without a code
+change in Consultation Agent. It has no roles of its own.
+
 Two rules are enforced both here and as Postgres CHECK constraints, because the
 role set is the one piece of state that must never be wrong:
 

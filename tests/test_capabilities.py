@@ -30,6 +30,10 @@ def bt(roles):
     return build_capabilities(sorted(roles))['broker_tools']
 
 
+def ca(roles):
+    return build_capabilities(sorted(roles))['consultation_agent']
+
+
 # ── App access ───────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize('roles, cms_access, bt_access', [
@@ -50,6 +54,18 @@ def bt(roles):
 def test_app_access_is_a_union(roles, cms_access, bt_access):
     assert cms(roles)['access'] is cms_access
     assert bt(roles)['access'] is bt_access
+    # Consultation Agent is granted to exactly the Broker Tools roles.
+    assert ca(roles)['access'] is bt_access
+
+
+@pytest.mark.parametrize('roles, expected', [
+    (['viewer'], None),
+    (['sales', 'viewer'], 'sales'),
+    (['lead_manager', 'presales'], 'lead_manager'),
+    (['admin', 'sales'], 'admin'),
+])
+def test_consultation_agent_primary_role_matches_broker_tools(roles, expected):
+    assert ca(roles)['primary_role'] == expected
 
 
 # ── CMS capabilities ─────────────────────────────────────────────────────────
@@ -183,6 +199,7 @@ def test_deactivated_user_gets_no_access_anywhere(roles):
     for flag in CMS_WRITE_FLAGS + CMS_ADMIN_FLAGS:
         assert caps['cms'][flag] is False, flag
     assert caps['broker_tools']['unrestricted_leads'] is False
+    assert caps['consultation_agent'] == {'access': False, 'primary_role': None}
 
 
 # ── validate_roles ───────────────────────────────────────────────────────────
@@ -257,7 +274,8 @@ def test_payload_shape_is_the_consumer_contract():
     assert payload['active'] is True
     assert payload['roles'] == ['manager', 'sales']
     assert payload['role_labels'] == ['Manager', 'Sales']
-    assert set(payload['apps']) == {'cms', 'broker_tools'}
+    assert set(payload['apps']) == {'cms', 'broker_tools', 'consultation_agent'}
+    assert payload['apps']['consultation_agent'] == {'access': True, 'primary_role': 'sales'}
     assert payload['apps']['cms']['can_publish'] is True
     assert payload['apps']['broker_tools']['own_sales'] is True
     assert payload['apps']['broker_tools']['unrestricted_leads'] is False

@@ -148,6 +148,16 @@ def _broker_tools_capabilities(held: set[str]) -> dict:
     }
 
 
+def _consultation_agent_capabilities(held: set[str]) -> dict:
+    # Granted to exactly the Broker Tools roles, by decision rather than by
+    # coincidence. It is its own block so the two can diverge later without a
+    # change in Consultation Agent's code. It has no roles of its own.
+    return {
+        'access': bool(held & _BT_READ),
+        'primary_role': _primary_role(held, _BT_PRECEDENCE),
+    }
+
+
 _NO_ACCESS_CMS = {
     'access': False, 'primary_role': None,
     'can_add_property': False, 'can_edit_property': False, 'can_publish': False,
@@ -160,6 +170,8 @@ _NO_ACCESS_BT = {
     'unrestricted_leads': False, 'own_presales': False, 'own_sales': False,
 }
 
+_NO_ACCESS_CA = {'access': False, 'primary_role': None}
+
 
 def build_capabilities(roles: list[str], *, is_active: bool = True) -> dict:
     """Resolve a role set into per-app capabilities.
@@ -169,12 +181,17 @@ def build_capabilities(roles: list[str], *, is_active: bool = True) -> dict:
     deactivation cannot outlive it by more than the consumer cache TTL.
     """
     if not is_active:
-        return {'cms': dict(_NO_ACCESS_CMS), 'broker_tools': dict(_NO_ACCESS_BT)}
+        return {
+            'cms': dict(_NO_ACCESS_CMS),
+            'broker_tools': dict(_NO_ACCESS_BT),
+            'consultation_agent': dict(_NO_ACCESS_CA),
+        }
 
     held = set(roles)
     return {
         'cms': _cms_capabilities(held),
         'broker_tools': _broker_tools_capabilities(held),
+        'consultation_agent': _consultation_agent_capabilities(held),
     }
 
 
