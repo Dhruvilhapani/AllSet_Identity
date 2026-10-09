@@ -131,6 +131,7 @@ echo "==> Syncing secrets from $(basename "$ENV_FILE") into Secret Manager..."
 create_or_update_secret "identity-supabase-anon-key"         "$(read_env_var SUPABASE_ANON_KEY)"
 create_or_update_secret "identity-supabase-service-role-key" "$(read_env_var SUPABASE_SERVICE_ROLE_KEY)"
 create_or_update_secret "identity-allset-service-key"        "$(read_env_var ALLSET_SERVICE_KEY)"
+create_or_update_secret "identity-allset-service-keys"       "$(read_env_var ALLSET_SERVICE_KEYS)"
 create_or_update_secret "identity-legacy-cms-db-password"    "$(read_env_var LEGACY_CMS_DB_PASSWORD)"
 
 # ---------------------------------------------------------------------------

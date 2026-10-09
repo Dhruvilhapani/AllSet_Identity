@@ -38,11 +38,11 @@ def check_service_key(presented: str | None) -> None:
     refuses traffic instead of accepting anonymous introspection. Same posture
     as Broker Tools' HasLeadsMasterSyncSecret / HasBrokerToolsServiceSecret.
     """
-    expected = config.SERVICE_KEY
-    if not expected:
-        logger.error('ALLSET_SERVICE_KEY is not configured; refusing service request')
+    accepted = [key for key in (config.SERVICE_KEY, *config.SERVICE_KEYS.values()) if key]
+    if not accepted:
+        logger.error('no service key is configured; refusing service request')
         raise ServiceKeyInvalid('service authentication is not configured')
-    if not presented or not hmac.compare_digest(presented, expected):
+    if not presented or not any(hmac.compare_digest(presented, key) for key in accepted):
         raise ServiceKeyInvalid('invalid service key')
 
 

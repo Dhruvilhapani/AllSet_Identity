@@ -33,6 +33,11 @@ So `{sales, viewer}` means own-leads in Broker Tools plus read-only CMS, and
 `{manager, sales}` means CMS editor-level plus own-leads — not all leads, which
 is why `manager` and `lead_manager` are separate roles.
 
+Consultation Agent has its own `consultation_agent` capability block, carrying
+only `access` and `primary_role`. It is granted to exactly the Broker Tools
+roles, and is a separate block so the two can diverge later without a code
+change in Consultation Agent. It has no roles of its own.
+
 Two rules are enforced both here and as Postgres CHECK constraints, because the
 role set is the one piece of state that must never be wrong:
 
@@ -362,6 +367,11 @@ either be added to its `candidate_keys` list or set by hand in the console.
 - `ALLSET_SERVICE_KEY` is compared with `hmac.compare_digest` and **fails closed
   when unset**, so a misconfigured deploy refuses introspection rather than
   accepting anonymous callers.
+- New consumers get their own key in `ALLSET_SERVICE_KEYS` rather than
+  `ALLSET_SERVICE_KEY`, which is shared with ai_service and the CMS backend's
+  internal endpoints. A per-consumer key unlocks only introspection and can be
+  revoked alone. Onboarding steps are in
+  [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
 - `user_profiles` has RLS enabled with no policies. Only the service-role key
   reads it, so a leaked anon key reads nothing rather than the whole roster.
 - Login reports one generic message for every failure mode, and password reset

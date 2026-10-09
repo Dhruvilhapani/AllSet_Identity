@@ -45,6 +45,42 @@ def test_unset_service_key_fails_closed(client, monkeypatch):
     assert response.status_code == 401
 
 
+def test_per_consumer_key_is_accepted_alongside_the_shared_one(client, monkeypatch):
+    from app.core import config
+
+    monkeypatch.setattr(config, 'SERVICE_KEYS', {'reports': 'reports-only-key'})
+    for key in ('reports-only-key', SERVICE_KEY):
+        response = client.get(
+            '/v1/introspect/health', headers={'X-Allset-Service-Key': key}
+        )
+        assert response.status_code == 200, key
+
+
+def test_per_consumer_key_alone_still_authenticates(client, monkeypatch):
+    """An empty shared key must not trip the fail-closed branch while a
+    consumer key is configured."""
+    from app.core import config
+
+    monkeypatch.setattr(config, 'SERVICE_KEY', '')
+    monkeypatch.setattr(config, 'SERVICE_KEYS', {'reports': 'reports-only-key'})
+    ok = client.get('/v1/introspect/health', headers={'X-Allset-Service-Key': 'reports-only-key'})
+    assert ok.status_code == 200
+    wrong = client.get('/v1/introspect/health', headers={'X-Allset-Service-Key': 'reports'})
+    assert wrong.status_code == 401
+
+
+def test_per_consumer_keys_parse_and_reject_malformed_entries(monkeypatch):
+    from app.core import config
+
+    monkeypatch.setenv('ALLSET_SERVICE_KEYS', ' reports:abc , billing:d:e ,')
+    assert config._named_keys('ALLSET_SERVICE_KEYS') == {'reports': 'abc', 'billing': 'd:e'}
+
+    for bad in ('just-a-key', 'reports:', ':abc'):
+        monkeypatch.setenv('ALLSET_SERVICE_KEYS', bad)
+        with pytest.raises(RuntimeError):
+            config._named_keys('ALLSET_SERVICE_KEYS')
+
+
 def test_service_key_comparison_is_not_a_prefix_match(client):
     for candidate in (SERVICE_KEY[:-1], SERVICE_KEY + 'x', SERVICE_KEY.upper()):
         response = client.post(

@@ -454,6 +454,19 @@ def test_login_roles_come_from_the_token_not_the_response_body(
 
 
 @respx.mock
+def test_login_grants_consultation_agent_to_broker_tools_roles(client, make_token, jwks_mock):
+    """Consultation Agent refuses a sign-in unless this block says access; with
+    no block at all, every login there failed with "no access"."""
+    respx.post(TOKEN_URL).mock(
+        return_value=Response(200, json=session_body(make_token(roles=['presales'])))
+    )
+    user = client.post(
+        '/v1/auth/login', json={'email': 'someone@allset.in', 'password': 'pw'}
+    ).json()['user']
+    assert user['apps']['consultation_agent'] == {'access': True, 'primary_role': 'presales'}
+
+
+@respx.mock
 def test_login_response_matches_introspect_for_the_same_token(
     client, make_token, jwks_mock, service_headers
 ):
