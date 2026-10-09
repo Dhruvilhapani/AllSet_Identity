@@ -93,6 +93,28 @@ SUPABASE_JWT_SECRET = os.environ.get('SUPABASE_JWT_SECRET', '')
 # Fails closed when unset, matching Broker Tools' HasLeadsMasterSyncSecret.
 SERVICE_KEY = os.environ.get('ALLSET_SERVICE_KEY', '')
 
+
+def _named_keys(name: str) -> dict[str, str]:
+    """Parse `consumer:key,consumer:key` into {consumer: key}."""
+    keys: dict[str, str] = {}
+    for entry in os.environ.get(name, '').split(','):
+        if not entry.strip():
+            continue
+        consumer, _, key = entry.strip().partition(':')
+        if not consumer.strip() or not key.strip():
+            # The entry is not echoed: without a colon it is likely a bare key.
+            raise RuntimeError(f'{name} entries must be "consumer:key"')
+        keys[consumer.strip()] = key.strip()
+    return keys
+
+
+# Per-consumer keys, accepted on the same header as ALLSET_SERVICE_KEY. A
+# consumer given one of these can be revoked alone, and its key unlocks only
+# introspection — ALLSET_SERVICE_KEY is shared with ai_service and the CMS
+# backend's internal endpoints, so handing it out grants those too. The name
+# before the colon only identifies the key for whoever rotates it.
+SERVICE_KEYS = _named_keys('ALLSET_SERVICE_KEYS')
+
 # ── Shadow migration (CMS legacy passwords) ──────────────────────────────────
 # Read-only connection to the CMS's Supabase project so a user's existing Django
 # PBKDF2 password keeps working once, then gets upgraded to Supabase. Only the

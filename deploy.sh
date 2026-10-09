@@ -150,6 +150,7 @@ secret_exists() {
 SECRET_PAIRS="SUPABASE_ANON_KEY=identity-supabase-anon-key"
 SECRET_PAIRS+=" SUPABASE_SERVICE_ROLE_KEY=identity-supabase-service-role-key"
 SECRET_PAIRS+=" ALLSET_SERVICE_KEY=identity-allset-service-key"
+SECRET_PAIRS+=" ALLSET_SERVICE_KEYS=identity-allset-service-keys"
 SECRET_PAIRS+=" LEGACY_CMS_DB_PASSWORD=identity-legacy-cms-db-password"
 
 SECRETS=""

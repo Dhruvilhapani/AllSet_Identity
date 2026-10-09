@@ -362,6 +362,10 @@ either be added to its `candidate_keys` list or set by hand in the console.
 - `ALLSET_SERVICE_KEY` is compared with `hmac.compare_digest` and **fails closed
   when unset**, so a misconfigured deploy refuses introspection rather than
   accepting anonymous callers.
+- New consumers get their own key in `ALLSET_SERVICE_KEYS` rather than
+  `ALLSET_SERVICE_KEY`, which is shared with ai_service and the CMS backend's
+  internal endpoints. A per-consumer key unlocks only introspection and can be
+  revoked alone.
 - `user_profiles` has RLS enabled with no policies. Only the service-role key
   reads it, so a leaked anon key reads nothing rather than the whole roster.
 - Login reports one generic message for every failure mode, and password reset
