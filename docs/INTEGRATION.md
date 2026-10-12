@@ -142,6 +142,7 @@ Content-Type: application/json
   "user_id": "6f1c2a9e-0b7d-4c3e-9a51-2d8e7f4b1c06",
   "email": "someone@allset.in",
   "full_name": "Some One",
+  "phone": "+91 98765 43210",
   "roles": ["presales", "viewer"],
   "role_labels": ["Pre-sales", "Viewer"],
   "is_active": true,
@@ -359,6 +360,15 @@ guarantees nobody holds both `presales` and `sales`.
 | `access` | bool | Whether to let them in at all. `current_user` already checks it. |
 | `primary_role` | string or null | Display and audit columns only, never access. Precedence: admin, tech, lead_manager, presales, sales. |
 
+`phone` (top level, not in the block) is how Consultation Agent finds the
+signed-in person's `brokers` document: match on the last 10 digits, because it
+is passed through exactly as an admin typed it (`+91 98765 43210`,
+`9876543210`). It is empty when the profile has no phone, and in a token minted
+before Identity started stamping it. Admins set it with
+`scripts/manage_users.py phone <email> <phone>`. A changed phone reaches the
+user's token at their next sign-in or refresh, so a number moved between people
+keeps resolving to its old owner for as long as their current token lives.
+
 ### Lead scope: the `broker_tools` flags
 
 If your service shows leads, scope them with these flags from the same
@@ -391,9 +401,10 @@ UI.
 
 ## Signing users in
 
-Which path Consultation Agent's sign-in takes is not settled yet. Both work.
-Pick one and tell the Identity owner, because the browser path may need a change
-on their side.
+Consultation Agent's backend proxies sign-in (decided 2026-10-12): its
+frontend posts email and password to its own backend, which calls Identity
+server-to-server, so Identity needs no CORS change. The browser path is
+described too, for other services.
 
 | | Your backend proxies sign-in | Your browser calls Identity |
 | --- | --- | --- |
