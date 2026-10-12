@@ -32,6 +32,11 @@ class CreateUserRequest(BaseModel):
     roles: list[str] = Field(default_factory=list)
 
 
+class UpdateProfileRequest(BaseModel):
+    full_name: str | None = Field(default=None, max_length=200)
+    phone: str | None = Field(default=None, max_length=32)
+
+
 class UpdateRolesRequest(BaseModel):
     roles: list[str]
 
@@ -110,6 +115,32 @@ def create_user(payload: CreateUserRequest) -> dict:
     )
     supabase_client.send_recovery_email(email)
 
+    return _profile_response(profile)
+
+
+@router.patch('/users/{user_id}')
+def update_profile(
+    user_id: str, payload: UpdateProfileRequest, caller: Caller = Depends(require_global_admin)
+) -> dict:
+    """Change a user's name or phone.
+
+    Both ride in the access token, so the change reaches a consumer when the
+    user next signs in or refreshes. Phone matters more than it looks:
+    Consultation Agent finds a user's broker profile by it, so a phone moved
+    from one person to another keeps resolving to the old owner's profile for
+    as long as their current token lives. Sessions are not revoked here because
+    that would not shorten it — revocation kills refresh tokens, not the access
+    token already issued.
+    """
+    changes = {field: value.strip() for field, value in payload.model_dump(exclude_none=True).items()}
+    if not changes:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, 'nothing to update')
+
+    if profiles.get_by_user_id(user_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, 'user not found')
+
+    profile = profiles.update(user_id, changes)
+    logger.info('%s updated for %s by %s', ', '.join(sorted(changes)), user_id, caller.user_id)
     return _profile_response(profile)
 
 

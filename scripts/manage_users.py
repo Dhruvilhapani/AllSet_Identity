@@ -9,6 +9,7 @@ either one. This talks to the identity service directly.
     python scripts/manage_users.py create khush@allset.in "Khush Anada" lead_manager viewer
     python scripts/manage_users.py roles darshil@allset.in sales viewer
     python scripts/manage_users.py status bhavin@allset.in off
+    python scripts/manage_users.py phone jinal@allset.in 9876543210
     python scripts/manage_users.py roles someone@allset.in          # no roles = no access
 
 Authenticates as you. The password is prompted for when interactive and read
@@ -121,7 +122,8 @@ def show(users: list[dict]) -> None:
         bt = 'broker_tools' if u['apps']['broker_tools']['access'] else '------------'
         state = '' if u['is_active'] else '  [INACTIVE]'
         roles = ', '.join(u['roles']) or 'no roles'
-        print(f'  {u["email"]:<{width}}  {cms:3} {bt:12}  {roles}{state}')
+        phone = u.get('phone') or 'no phone'
+        print(f'  {u["email"]:<{width}}  {cms:3} {bt:12}  {phone:<14}  {roles}{state}')
 
 
 def main() -> None:
@@ -164,8 +166,17 @@ def main() -> None:
             {'is_active': active})
         print(f'{email} is now {"active" if active else "INACTIVE"}')
 
+    elif action == 'phone':
+        if len(args) != 2:
+            die('usage: phone <email> <phone>')
+        email, phone = args
+        user = find(token, email)
+        updated = api(token, 'PATCH', f'/v1/admin/users/{user["user_id"]}', {'phone': phone})
+        print(f'{email}: phone {user["phone"] or "(none)"} -> {updated["phone"]}')
+        print('it reaches their token when they next sign in or refresh')
+
     else:
-        die(f'unknown action {action!r} - try list, create, roles or status')
+        die(f'unknown action {action!r} - try list, create, roles, status or phone')
 
 
 if __name__ == '__main__':

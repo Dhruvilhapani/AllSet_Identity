@@ -147,6 +147,7 @@ refresh into Broker Tools and dropping this back to an hour is the fix.
 | Method | Path | Notes |
 |---|---|---|
 | GET, POST | `/v1/admin/users` | |
+| PATCH | `/v1/admin/users/{id}` | Name and phone. Both ride in the token, so they reach consumers at the user's next sign-in or refresh. |
 | PATCH | `/v1/admin/users/{id}/roles` | Revokes the target's sessions. |
 | PATCH | `/v1/admin/users/{id}/status` | Revokes the target's sessions on deactivation. |
 | POST | `/v1/admin/users/{id}/reset-password` | Emails a set-password link. |
@@ -256,7 +257,13 @@ rather than stubbed.
    python scripts/manage_users.py create jinal@allset.in "Jinal Jadeja" presales
    python scripts/manage_users.py roles khush@allset.in lead_manager viewer
    python scripts/manage_users.py status bhavin@allset.in off
+   python scripts/manage_users.py phone jinal@allset.in 9876543210
    ```
+
+   Set a phone for everyone who uses Consultation Agent: it finds each
+   person's broker profile by the phone in their token. To fill them in bulk
+   from Broker Tools' `team_members`, review and run
+   `scripts/backfill_profile_phone.sql` in the SQL editor.
 
    Each new account is emailed a set-password link and chooses its own
    password. This retires the hardcoded `Allset@2024` seeds.

@@ -7,6 +7,8 @@ change roles" and not.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import respx
 from httpx import Response
@@ -298,6 +300,77 @@ def test_creating_a_user_with_a_bad_role_creates_nothing(client, make_token, jwk
     )
     assert response.status_code == 400
     assert not create.called
+
+
+@respx.mock
+def test_admin_can_set_a_users_phone_and_name(client, make_token, jwks_mock):
+    respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
+    updated = {**profile_row(), 'phone': '9876543210', 'full_name': 'New Name'}
+    patch = respx.patch(PROFILES_URL).mock(return_value=Response(200, json=[updated]))
+
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}',
+        json={'phone': ' 9876543210 ', 'full_name': 'New Name'},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+
+    assert response.status_code == 200
+    assert response.json()['phone'] == '9876543210'
+    sent = patch.calls.last.request
+    assert f'user_id=eq.{OTHER_ID}' in str(sent.url)
+    # Trimmed before it is stored, and roles are not part of this endpoint.
+    assert json.loads(sent.content) == {'phone': '9876543210', 'full_name': 'New Name'}
+
+
+@respx.mock
+def test_profile_update_does_not_revoke_sessions(client, make_token, jwks_mock):
+    """Revoking would not shorten how long the old phone lives in an issued
+    access token, so it is not done."""
+    respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
+    respx.patch(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
+    revoke = respx.post(REVOKE_URL).mock(return_value=Response(204))
+
+    client.patch(
+        f'/v1/admin/users/{OTHER_ID}',
+        json={'phone': '9876543210'},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+    assert not revoke.called
+
+
+def test_profile_update_with_nothing_to_change_is_a_400(client, make_token, jwks_mock):
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}', json={},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+    assert response.status_code == 400
+
+
+def test_profile_update_rejects_an_overlong_phone(client, make_token, jwks_mock):
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}', json={'phone': '9' * 33},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+    assert response.status_code == 422
+
+
+@respx.mock
+def test_profile_update_on_a_missing_user_is_404(client, make_token, jwks_mock):
+    respx.get(PROFILES_URL).mock(return_value=Response(200, json=[]))
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}', json={'phone': '9876543210'},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize('roles', [['viewer'], ['lead_manager'], ['presales'], []])
+def test_non_admins_cannot_change_a_profile(client, make_token, jwks_mock, roles):
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}', json={'phone': '9876543210'},
+        headers=auth_header(make_token(roles=roles)),
+    )
+    assert response.status_code == 403
 
 
 @respx.mock
