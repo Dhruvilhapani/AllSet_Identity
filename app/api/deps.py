@@ -29,6 +29,7 @@ class Caller:
     is_active: bool
     full_name: str
     token: str
+    phone: str = ''
 
     @property
     def is_global_admin(self) -> bool:
@@ -69,7 +70,7 @@ def current_caller(
             headers={'WWW-Authenticate': 'Bearer'},
         ) from exc
 
-    user_id, email, roles, is_active, full_name = security.claims_to_identity(claims)
+    user_id, email, roles, is_active, full_name, phone = security.claims_to_identity(claims)
 
     if not is_active:
         # Covers both a deactivated account and a token minted for a user with
@@ -83,6 +84,7 @@ def current_caller(
         is_active=is_active,
         full_name=full_name,
         token=credentials.credentials,
+        phone=phone,
     )
 
 

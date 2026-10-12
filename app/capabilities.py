@@ -202,6 +202,7 @@ def build_payload(
     roles: list[str],
     is_active: bool,
     full_name: str = '',
+    phone: str = '',
 ) -> dict:
     """The response shape shared by /v1/introspect and /v1/auth/me.
 
@@ -213,6 +214,9 @@ def build_payload(
         'user_id': user_id,
         'email': email,
         'full_name': full_name,
+        # As stored on the profile, not normalised. Consultation Agent matches
+        # it against its brokers' phones, so it does its own normalisation.
+        'phone': phone,
         'roles': roles,
         'role_labels': [ROLE_LABELS[role] for role in roles],
         'is_active': bool(is_active),

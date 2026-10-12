@@ -85,6 +85,21 @@ def test_successful_login_returns_tokens_and_capabilities(client, make_token, jw
 
 
 @respx.mock
+def test_login_returns_the_phone_from_the_token(client, make_token, jwks_mock):
+    """Consultation Agent's backend proxies sign-in and finds the broker
+    profile by phone straight from this response."""
+    respx.post(TOKEN_URL).mock(
+        return_value=Response(
+            200, json=session_body(make_token(roles=['presales'], phone='9876543210'))
+        )
+    )
+    response = client.post(
+        '/v1/auth/login', json={'email': 'someone@allset.in', 'password': 'correct-horse'}
+    )
+    assert response.json()['user']['phone'] == '9876543210'
+
+
+@respx.mock
 def test_login_normalises_the_email(client, make_token, jwks_mock):
     route = respx.post(TOKEN_URL).mock(
         return_value=Response(200, json=session_body(make_token(roles=['viewer'])))

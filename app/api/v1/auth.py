@@ -101,7 +101,7 @@ def _session_response(session: dict) -> dict:
 
     try:
         claims = security.verify_access_token(access_token)
-        user_id, email, roles, is_active, full_name = security.claims_to_identity(claims)
+        user_id, email, roles, is_active, full_name, phone = security.claims_to_identity(claims)
     except security.TokenInvalid as exc:
         # Supabase just issued this token, so failing to verify it means the
         # project's signing keys or issuer do not match our configuration.
@@ -124,6 +124,7 @@ def _session_response(session: dict) -> dict:
             roles=roles,
             is_active=is_active,
             full_name=full_name or (user.get('user_metadata') or {}).get('full_name', ''),
+            phone=phone,
         ),
     }
 
@@ -231,6 +232,7 @@ def me(caller: Caller = Depends(current_caller)) -> dict:
         roles=caller.roles,
         is_active=caller.is_active,
         full_name=caller.full_name,
+        phone=caller.phone,
     )
 
 

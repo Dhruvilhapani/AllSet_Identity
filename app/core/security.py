@@ -163,8 +163,11 @@ def verify_access_token(token: str) -> dict:
     return claims
 
 
-def claims_to_identity(claims: dict) -> tuple[str, str, list[str], bool, str]:
-    """Extract (user_id, email, roles, is_active, full_name) from verified claims.
+def claims_to_identity(claims: dict) -> tuple[str, str, list[str], bool, str, str]:
+    """Extract (user_id, email, roles, is_active, full_name, phone) from verified claims.
+
+    phone is empty for a token minted before the hook started stamping it, and
+    for a profile with no phone on record.
 
     Roles come from app_metadata, written by the Custom Access Token Hook. A
     token with no app_metadata.roles predates the hook or belongs to a user with
@@ -198,4 +201,5 @@ def claims_to_identity(claims: dict) -> tuple[str, str, list[str], bool, str]:
         sorted(roles),
         bool(app_metadata.get('is_active', False)),
         app_metadata.get('full_name') or '',
+        app_metadata.get('phone') or '',
     )

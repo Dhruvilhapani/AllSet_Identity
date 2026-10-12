@@ -42,10 +42,13 @@ begin
             'is_active', false
         );
     else
+        -- phone is here because Consultation Agent finds a user's broker
+        -- profile by it on every request, and introspect reads only the token.
         app_metadata := app_metadata || jsonb_build_object(
             'roles', to_jsonb(profile.roles),
             'is_active', profile.is_active,
-            'full_name', profile.full_name
+            'full_name', profile.full_name,
+            'phone', profile.phone
         );
     end if;
 

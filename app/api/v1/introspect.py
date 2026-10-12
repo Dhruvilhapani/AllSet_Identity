@@ -45,7 +45,7 @@ def introspect(payload: IntrospectRequest) -> dict:
             'apps': capabilities.build_capabilities([], is_active=False),
         }
 
-    user_id, email, roles, is_active, full_name = security.claims_to_identity(claims)
+    user_id, email, roles, is_active, full_name, phone = security.claims_to_identity(claims)
 
     return capabilities.build_payload(
         user_id=user_id,
@@ -53,6 +53,7 @@ def introspect(payload: IntrospectRequest) -> dict:
         roles=roles,
         is_active=is_active,
         full_name=full_name,
+        phone=phone,
     )
 
 
