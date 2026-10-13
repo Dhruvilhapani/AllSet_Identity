@@ -1,0 +1,9 @@
+{
+  "service": "identity",
+  "name": "AllSet Identity",
+  "description": "Users, roles and permissions for every AllSet service",
+  "is_system": true,
+  "resources": {
+    "console": {"label": "Admin console", "actions": ["use"]}
+  }
+}

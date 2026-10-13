@@ -1,0 +1,26 @@
+{
+  "service": "wa_automation",
+  "name": "WhatsApp Automation",
+  "description": "WhatsApp and Instagram console for leads",
+  "resources": {
+    "lead": {
+      "label": "Lead chats",
+      "actions": ["read", "mark_read", "send_message", "set_handover", "clear", "mark_pdf_sent", "test_chat"],
+      "scopes": {
+        "assigned_presales": "Leads assigned to them (pre-sales)",
+        "assigned_sales": "Leads assigned to them (sales)",
+        "own_test_identity": "Their own test chats"
+      }
+    },
+    "handover_global": {"label": "Global handover", "actions": ["update"]},
+    "prompt": {"label": "Prompts", "actions": ["read", "update", "reset", "publish"],
+               "scopes": {"own": "Their own draft"}},
+    "agent_models": {"label": "Agent models", "actions": ["read", "update", "publish"],
+                     "scopes": {"own": "Their own draft"}},
+    "whatsapp_number": {"label": "WhatsApp numbers",
+                        "actions": ["create", "read", "update", "delete", "enable", "disable", "migrate_env"]},
+    "whatsapp_template": {"label": "WhatsApp templates",
+                          "actions": ["create", "read", "update", "delete", "enable", "disable"]},
+    "meta_ads": {"label": "Meta Ads", "actions": ["read", "generate_insights", "change_campaign_status"]}
+  }
+}

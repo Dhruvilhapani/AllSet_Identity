@@ -1,0 +1,18 @@
+[
+  {"key": "admin", "label": "Admin", "priority": 10, "is_superuser": true,
+   "description": "Everything in every service, including user management and the admin console"},
+  {"key": "tech", "label": "Tech", "priority": 20,
+   "description": "Nearly everything; kept out of a few admin-only settings"},
+  {"key": "manager", "label": "Manager", "priority": 30,
+   "description": "Add, edit and publish properties in the CMS"},
+  {"key": "editor", "label": "Editor", "priority": 40,
+   "description": "Add, edit and publish properties in the CMS"},
+  {"key": "viewer", "label": "Viewer", "priority": 50,
+   "description": "Read-only access to the CMS"},
+  {"key": "lead_manager", "label": "Lead Manager", "priority": 60,
+   "description": "Every lead in Broker Tools; no CMS access"},
+  {"key": "presales", "label": "Pre-sales", "priority": 70, "exclusive_group": "desk",
+   "description": "Own pre-sales leads in Broker Tools"},
+  {"key": "sales", "label": "Sales", "priority": 80, "exclusive_group": "desk",
+   "description": "Own sales leads in Broker Tools"}
+]

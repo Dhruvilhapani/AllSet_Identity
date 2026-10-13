@@ -1,0 +1,17 @@
+{
+  "service": "consultation_agent",
+  "name": "Consultation Agent",
+  "description": "Buyer consultations, recordings and itineraries",
+  "resources": {
+    "consultation_session": {"label": "Consultation sessions", "actions": ["create", "read", "update", "analyze"],
+                             "scopes": {"own": "Their own sessions"}},
+    "recording": {"label": "Recordings", "actions": ["create", "read"],
+                  "scopes": {"own": "Their own recordings"}},
+    "itinerary": {"label": "Itineraries", "actions": ["create", "send"],
+                  "scopes": {"own": "Their own itineraries"}},
+    "buyer": {"label": "Buyers", "actions": ["read", "create", "update"]},
+    "property": {"label": "Properties", "actions": ["read"]},
+    "wishlist": {"label": "Wishlists", "actions": ["read", "create", "delete"]},
+    "visit_feedback": {"label": "Visit feedback", "actions": ["read", "create"]}
+  }
+}
