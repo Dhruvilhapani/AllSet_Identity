@@ -1,6 +1,6 @@
 import { describe as group, expect, it } from 'vitest'
 
-import { ALL, cellKey, describe, diff, serialise, toCells, toggleScope } from './matrix'
+import { ALL, cellKey, describe, diff, rolesInUse, serialise, toCells, toggleScope } from './matrix'
 import type { CatalogueResource, Grants } from './types'
 
 const grants: Grants = {
@@ -47,6 +47,26 @@ group('serialise', () => {
   it('round-trips the grants and leaves superusers out', () => {
     const cells = toggleScope(toCells(grants), 'admin', 'lead', 'read', ALL)
     expect(serialise(cells, new Set(['admin']))).toEqual(grants)
+  })
+})
+
+group('rolesInUse', () => {
+  const roles = [
+    { key: 'admin', is_superuser: true },
+    { key: 'tech', is_superuser: false },
+    { key: 'presales', is_superuser: false },
+    { key: 'viewer', is_superuser: false },
+  ]
+
+  it('shows superusers and roles granted something, not the rest', () => {
+    expect([...rolesInUse(roles, toCells(grants))].sort()).toEqual(['admin', 'presales', 'tech'])
+  })
+
+  it('keeps a role whose grants are being removed, and adds one being granted', () => {
+    const loaded = toCells(grants)
+    let edited = toggleScope(loaded, 'tech', 'lead', 'read', ALL)          // tech now has nothing
+    edited = toggleScope(edited, 'viewer', 'lead', 'read', ALL)             // viewer gets something
+    expect([...rolesInUse(roles, loaded, edited)].sort()).toEqual(['admin', 'presales', 'tech', 'viewer'])
   })
 })
 

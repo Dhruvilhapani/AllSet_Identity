@@ -5,7 +5,7 @@ import { Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import { Button, ErrorBox, Loading, Modal, Notice, PageHeader, SelectInput } from '../components/ui'
 import { api, ApiError } from '../lib/api'
-import { ALL, cellKey, describe, diff, serialise, toCells, toggleScope, type Cells } from '../lib/matrix'
+import { ALL, cellKey, describe, diff, rolesInUse, serialise, toCells, toggleScope, type Cells } from '../lib/matrix'
 import { keys, useService, useServices } from '../lib/queries'
 import type { CatalogueResource, GrantsResponse } from '../lib/types'
 
@@ -52,6 +52,7 @@ function Matrix({ service }: { service: string }) {
   const [base, setBase] = useState<{ version: number; cells: Cells } | null>(null)
   const [cells, setCells] = useState<Cells>(new Map())
   const [reviewing, setReviewing] = useState(false)
+  const [allRoles, setAllRoles] = useState(false)
   const editing = useRef({ base, cells })
   editing.current = { base, cells }
 
@@ -89,6 +90,10 @@ function Matrix({ service }: { service: string }) {
 
   const roles = grants.data?.roles ?? []
   const superusers = new Set(roles.filter((r) => r.is_superuser).map((r) => r.key))
+  // Roles are shared by every service, but most hold nothing in a given one.
+  const inUse = rolesInUse(roles, initial, cells)
+  const shown = allRoles ? roles : roles.filter((r) => inUse.has(r.key))
+  const hidden = roles.length - inUse.size
   const resources = useMemo(() => {
     const live = (catalogue.data?.resources ?? []).filter((r) => !r.retired)
     return [...live.filter((r) => r.key === 'app'), ...live.filter((r) => r.key !== 'app')]
@@ -122,6 +127,19 @@ function Matrix({ service }: { service: string }) {
         </div>
       )}
 
+      {(hidden > 0 || allRoles) && (
+        <label className="flex items-center gap-2 text-sm text-gray-600">
+          <input type="checkbox" className="h-4 w-4 rounded border-gray-300" checked={allRoles}
+            onChange={(e) => setAllRoles(e.target.checked)} />
+          Show all roles
+          {hidden > 0 && (
+            <span className="text-gray-400">
+              ({hidden} with no permissions in {catalogue.data?.name} {allRoles ? 'shown' : 'hidden'})
+            </span>
+          )}
+        </label>
+      )}
+
       <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50">
@@ -129,7 +147,7 @@ function Matrix({ service }: { service: string }) {
               <th scope="col" className="sticky left-0 z-10 bg-gray-50 px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                 Resource › action
               </th>
-              {roles.map((role) => (
+              {shown.map((role) => (
                 <th key={role.key} scope="col" className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600">
                   {role.label}
                   {role.is_superuser && <span className="block font-normal text-gray-400">superuser</span>}
@@ -138,7 +156,7 @@ function Matrix({ service }: { service: string }) {
             </tr>
           </thead>
           {resources.map((resource) => (
-            <ResourceRows key={resource.key} resource={resource} roles={roles} cells={cells} initial={initial}
+            <ResourceRows key={resource.key} resource={resource} roles={shown} cells={cells} initial={initial}
               superusers={superusers} editable={editable}
               onToggle={(role, action, scope) => setCells((c) => toggleScope(c, role, resource.key, action, scope))} />
           ))}

@@ -47,6 +47,19 @@ export function toggleScope(cells: Cells, role: string, resource: string, action
   return updated
 }
 
+/**
+ * The roles a service's matrix shows unless the admin asks for every role:
+ * superusers, and roles granted anything there, as loaded or as edited, so a
+ * column never disappears part-way through an edit.
+ */
+export function rolesInUse(roles: { key: string; is_superuser: boolean }[], ...matrices: Cells[]): Set<string> {
+  const used = new Set(roles.filter((r) => r.is_superuser).map((r) => r.key))
+  for (const cells of matrices) {
+    for (const key of cells.keys()) used.add(splitKey(key)[0])
+  }
+  return used
+}
+
 /** The PUT body: the whole matrix for one service, superusers excluded. */
 export function serialise(cells: Cells, superusers: Set<string>): Grants {
   const grants: Grants = {}
