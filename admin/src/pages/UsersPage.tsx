@@ -13,7 +13,7 @@ export function UsersPage() {
   const [role, setRole] = useState('')
   const [service, setService] = useState('')
   const [active, setActive] = useState('')
-  const [inviting, setInviting] = useState(false)
+  const [adding, setAdding] = useState(false)
 
   const users = useUsers({ role, service, active })
   const roles = useRoles()
@@ -30,7 +30,7 @@ export function UsersPage() {
   return (
     <>
       <PageHeader title="Users" description="Everyone with an AllSet account, their roles, and which services they can use."
-        actions={<Button onClick={() => setInviting(true)}>Invite user</Button>} />
+        actions={<Button onClick={() => setAdding(true)}>Add user</Button>} />
 
       <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-4">
         <TextInput label="Search" placeholder="Name or email" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -76,23 +76,26 @@ export function UsersPage() {
         </Table>
       )}
 
-      <InviteDialog open={inviting} onClose={() => setInviting(false)} />
+      <AddUserDialog open={adding} onClose={() => setAdding(false)} />
     </>
   )
 }
 
-function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+function AddUserDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const roles = useRoles()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [repeat, setRepeat] = useState('')
   const [fullName, setFullName] = useState('')
   const [phone, setPhone] = useState('')
   const [selected, setSelected] = useState<string[]>([])
+  const mismatch = repeat.length > 0 && password !== repeat
 
-  const invite = useMutation({
+  const create = useMutation({
     mutationFn: () => api.post<AdminUser>('/admin/users', {
-      email: email.trim(), full_name: fullName.trim(), phone: phone.trim(), roles: selected,
+      email: email.trim(), password, full_name: fullName.trim(), phone: phone.trim(), roles: selected,
     }),
     onSuccess: (user) => {
       void queryClient.invalidateQueries({ queryKey: ['users'] })
@@ -102,31 +105,35 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
   })
 
   function close() {
-    setEmail(''); setFullName(''); setPhone(''); setSelected([]); invite.reset()
+    setEmail(''); setPassword(''); setRepeat(''); setFullName(''); setPhone(''); setSelected([]); create.reset()
     onClose()
   }
 
   function submit(e: FormEvent) {
     e.preventDefault()
-    invite.mutate()
+    create.mutate()
   }
 
   return (
-    <Modal open={open} title="Invite user" onClose={close} footer={<>
+    <Modal open={open} title="Add user" onClose={close} footer={<>
       <Button variant="secondary" onClick={close}>Cancel</Button>
-      <Button type="submit" form="invite-form" loading={invite.isPending}>Send invite</Button>
+      <Button type="submit" form="add-user-form" disabled={password.length < 10 || password !== repeat}
+        loading={create.isPending}>Add user</Button>
     </>}>
-      <form id="invite-form" onSubmit={submit} className="space-y-4">
+      <form id="add-user-form" onSubmit={submit} className="space-y-4">
         <p className="text-sm text-gray-600">
-          They get an email with a link to choose their own password. That email is not always delivered; if it
-          doesn&apos;t arrive, set a password for them on their page.
+          No email is sent. Hand the password over privately; they can change it after signing in.
         </p>
         <TextInput label="Email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+        <TextInput label="Password" type="password" autoComplete="new-password" required value={password}
+          onChange={(e) => setPassword(e.target.value)} help="At least 10 characters." />
+        <TextInput label="Repeat password" type="password" autoComplete="new-password" required value={repeat}
+          onChange={(e) => setRepeat(e.target.value)} error={mismatch ? 'The two passwords differ.' : null} />
         <TextInput label="Full name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
         <TextInput label="Phone" value={phone} onChange={(e) => setPhone(e.target.value)}
           help="Consultation Agent finds the person's broker profile by this number." />
         <RolePicker roles={roles.data?.roles ?? []} selected={selected} onChange={setSelected} />
-        <ErrorBox error={invite.error} />
+        <ErrorBox error={create.error} />
       </form>
     </Modal>
   )

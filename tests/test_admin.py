@@ -250,12 +250,15 @@ def test_tech_can_demote_an_admin(client, make_token, jwks_mock, policy_snapshot
 
 # ── Provisioning ─────────────────────────────────────────────────────────────
 
+NEW_PASSWORD = 'chosen-by-admin-1'
+
+
 @respx.mock
-def test_creating_a_user_sends_a_set_password_email_and_sets_no_password(
+def test_creating_a_user_sets_the_admins_password_and_sends_no_email(
     client, make_token, jwks_mock, policy_snapshot
 ):
-    """Replaces the CMS invite flow, which generated a random password and then
-    never emailed or returned it — leaving invited users unable to log in."""
+    """The admin chooses the password and hands it over (decided 2026-10-13);
+    nothing is emailed."""
     respx.get(PROFILES_URL).mock(return_value=Response(200, json=[]))
     respx.get(ADMIN_USERS_URL).mock(return_value=Response(200, json={'users': []}))
     create = respx.post(ADMIN_USERS_URL).mock(
@@ -270,21 +273,65 @@ def test_creating_a_user_sends_a_set_password_email_and_sets_no_password(
     token = make_token(roles=['admin'])
     response = client.post(
         '/v1/admin/users',
-        json={'email': 'New.Person@allset.in', 'full_name': 'New Person',
-              'roles': ['presales']},
+        json={'email': 'New.Person@allset.in', 'password': NEW_PASSWORD,
+              'full_name': 'New Person', 'roles': ['presales']},
         headers=auth_header(token),
     )
     assert response.status_code == 201
-    assert recover.called
+    assert not recover.called
     assert json.loads(set_roles.calls.last.request.content)['p_role_keys'] == ['presales']
     assert response.json()['roles'] == ['presales']
+    assert NEW_PASSWORD not in response.text
 
-    body = create.calls.last.request.read().decode()
-    # No password chosen by the admin, and the account is usable immediately
-    # because email confirmation is disabled for this project.
-    assert '"password"' not in body
-    assert '"email_confirm": true' in body.replace('":', '": ').replace('  ', ' ') or \
-           'email_confirm' in body
+    body = json.loads(create.calls.last.request.content)
+    # Usable at once: email confirmation is disabled for this project.
+    assert body['password'] == NEW_PASSWORD
+    assert body['email_confirm'] is True
+    assert body['email'] == 'new.person@allset.in'
+
+
+@respx.mock
+def test_creating_a_user_who_has_a_supabase_account_sets_their_password(
+    client, make_token, jwks_mock, policy_snapshot
+):
+    """An auth account with no profile here (left by an older invite flow) is
+    reused, and the admin's password replaces whatever it had, with its
+    sessions revoked, so the password handed over is the one that works."""
+    respx.get(PROFILES_URL).mock(return_value=Response(200, json=[]))
+    respx.get(ADMIN_USERS_URL).mock(
+        return_value=Response(200, json={'users': [{'id': OTHER_ID, 'email': 'old@allset.in'}]})
+    )
+    create = respx.post(ADMIN_USERS_URL).mock(return_value=Response(200, json={'id': 'never'}))
+    put = respx.put(f'{ADMIN_USERS_URL}/{OTHER_ID}').mock(
+        return_value=Response(200, json={'id': OTHER_ID})
+    )
+    revoke = respx.post(REVOKE_URL).mock(return_value=Response(200, text='1'))
+    respx.post(PROFILES_URL).mock(return_value=Response(201, json=[profile_row()]))
+    mock_set_roles(policy_snapshot)
+
+    response = client.post(
+        '/v1/admin/users',
+        json={'email': 'old@allset.in', 'password': NEW_PASSWORD, 'roles': ['viewer']},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+    assert response.status_code == 201
+    assert not create.called
+    assert json.loads(put.calls.last.request.content)['password'] == NEW_PASSWORD
+    assert revoke.called
+
+
+@pytest.mark.parametrize('password', [None, '', 'short'])
+@respx.mock
+def test_creating_a_user_needs_a_password_of_10_or_more(client, make_token, jwks_mock, password):
+    create = respx.post(ADMIN_USERS_URL).mock(return_value=Response(200, json={'id': OTHER_ID}))
+    body = {'email': 'new@allset.in', 'roles': ['viewer']}
+    if password is not None:
+        body['password'] = password
+
+    response = client.post('/v1/admin/users', json=body,
+                           headers=auth_header(make_token(roles=['admin'])))
+    assert response.status_code == 422
+    assert not create.called
 
 
 @respx.mock
@@ -293,7 +340,7 @@ def test_creating_a_duplicate_user_is_a_409(client, make_token, jwks_mock):
     token = make_token(roles=['admin'])
     response = client.post(
         '/v1/admin/users',
-        json={'email': 'other@allset.in', 'roles': ['viewer']},
+        json={'email': 'other@allset.in', 'password': NEW_PASSWORD, 'roles': ['viewer']},
         headers=auth_header(token),
     )
     assert response.status_code == 409
@@ -309,7 +356,7 @@ def test_creating_a_user_with_a_bad_role_creates_nothing(client, make_token, jwk
     token = make_token(roles=['admin'])
     response = client.post(
         '/v1/admin/users',
-        json={'email': 'new@allset.in', 'roles': ['presales', 'sales']},
+        json={'email': 'new@allset.in', 'password': NEW_PASSWORD, 'roles': ['presales', 'sales']},
         headers=auth_header(token),
     )
     assert response.status_code == 400

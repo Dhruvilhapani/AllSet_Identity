@@ -187,12 +187,12 @@ function AccountCard({ user }: { user: AdminUser }) {
           onClick={() => setConfirmStatus(true)}>
           {user.is_active ? 'Deactivate' : 'Activate'}
         </Button>
-        <Button variant="secondary" onClick={() => setSettingPassword(true)}>Set password</Button>
+        <Button variant="secondary" onClick={() => setSettingPassword(true)}>Change password</Button>
         <Button variant="secondary" loading={reset.isPending} onClick={() => reset.mutate()}>Email a reset link</Button>
       </div>
       <div className="mt-3 space-y-2">
-        {resetSent && <Notice tone="blue">Reset email requested. Delivery is not guaranteed; set a password if it doesn&apos;t arrive.</Notice>}
-        {setPasswordMutation.isSuccess && <Notice tone="blue">Password set. They were signed out everywhere; hand it over privately.</Notice>}
+        {resetSent && <Notice tone="blue">Reset email requested. Delivery is not guaranteed; change the password yourself if it doesn&apos;t arrive.</Notice>}
+        {setPasswordMutation.isSuccess && <Notice tone="blue">Password changed. They were signed out everywhere; hand it over privately.</Notice>}
         <ErrorBox error={reset.error} />
       </div>
 
@@ -205,14 +205,15 @@ function AccountCard({ user }: { user: AdminUser }) {
         onClose={() => { setConfirmStatus(false); status.reset() }}
         onConfirm={() => status.mutate({ is_active: !user.is_active }, { onSuccess: () => setConfirmStatus(false) })} />
 
-      <Modal open={settingPassword} title="Set password" onClose={() => setSettingPassword(false)} footer={<>
+      <Modal open={settingPassword} title="Change password" onClose={() => setSettingPassword(false)} footer={<>
         <Button variant="secondary" onClick={() => setSettingPassword(false)}>Cancel</Button>
         <Button disabled={password.length < 10 || password !== repeat} loading={setPasswordMutation.isPending}
-          onClick={() => setPasswordMutation.mutate()}>Set password</Button>
+          onClick={() => setPasswordMutation.mutate()}>Change password</Button>
       </>}>
         <div className="space-y-4">
           <p className="text-sm text-gray-600">
-            For someone locked out. They are signed out everywhere and should change it themselves afterwards.
+            Sets a new password without needing the old one. They are signed out everywhere and can change it
+            themselves after signing in.
           </p>
           <TextInput label="New password" type="password" autoComplete="new-password" value={password}
             onChange={(e) => setPassword(e.target.value)} help="At least 10 characters." />

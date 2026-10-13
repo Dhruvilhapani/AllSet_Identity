@@ -42,6 +42,9 @@ router = APIRouter(
 
 class CreateUserRequest(BaseModel):
     email: EmailStr
+    # Chosen by the admin, who hands it over; no email is sent. Same floor as
+    # SetPasswordRequest.
+    password: str = Field(min_length=10, max_length=256)
     full_name: str = Field(default='', max_length=200)
     phone: str = Field(default='', max_length=32)
     roles: list[str] = Field(default_factory=list)
@@ -209,12 +212,13 @@ def list_users(
 def create_user(
     payload: CreateUserRequest, caller: Caller = Depends(require_global_admin)
 ) -> dict:
-    """Provision an account and email a set-password link.
+    """Provision an account with the password the admin chose.
 
-    No password is set here: the invitee chooses their own via the recovery
-    email. This replaces the CMS's invite flow, which generated a random
-    password and then never emailed or returned it, leaving invited users unable
-    to log in at all.
+    Nothing is emailed (decided 2026-10-13): the admin hands the password over,
+    and the person can change it after signing in. Supabase's mailer was never
+    a reliable way in. If the email already has a Supabase account with no
+    profile here, that account gets this password and its sessions are revoked,
+    as set-password does, so the admin's password is the one that works.
     """
     email = payload.email.strip().lower()
     snapshot = _fresh()
@@ -226,9 +230,11 @@ def create_user(
     existing = supabase_client.admin_get_user_by_email(email)
     if existing is not None:
         user_id = existing['id']
+        supabase_client.admin_set_password(user_id, payload.password)
+        supabase_client.admin_sign_out_everywhere(user_id)
     else:
         created = supabase_client.admin_create_user(
-            email, password=None, full_name=payload.full_name
+            email, password=payload.password, full_name=payload.full_name
         )
         user_id = created['id']
 
@@ -240,7 +246,6 @@ def create_user(
         is_active=True,
     )
     policy_db.set_user_roles(user_id, roles, actor=caller.user_id)
-    supabase_client.send_recovery_email(email)
 
     snapshot = _fresh()
     return _profile_response(snapshot, {**profile, 'roles': roles})
