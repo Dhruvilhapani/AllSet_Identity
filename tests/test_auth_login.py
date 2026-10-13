@@ -241,12 +241,17 @@ def test_legacy_password_is_adopted_on_first_login(
                                           'roles': ['editor'], 'is_active': True}])
     )
     respx.patch(PROFILES_URL).mock(return_value=Response(204))
+    # The legacy role reaches the new account through identity_set_user_roles.
+    set_roles = respx.post(f'{SUPABASE_URL}/rest/v1/rpc/identity_set_user_roles').mock(
+        return_value=Response(200, json=['editor'])
+    )
 
     response = client.post(
         '/v1/auth/login', json={'email': 'old@allset.in', 'password': 'django-era-password'}
     )
     assert response.status_code == 200
     assert response.json()['user']['roles'] == ['editor']
+    assert set_roles.called
     # Re-authenticated after adoption so the token carries hook-written claims.
     assert len(token_route.calls) == 2
 
@@ -478,7 +483,9 @@ def test_login_grants_consultation_agent_to_broker_tools_roles(client, make_toke
     user = client.post(
         '/v1/auth/login', json={'email': 'someone@allset.in', 'password': 'pw'}
     ).json()['user']
-    assert user['apps']['consultation_agent'] == {'access': True, 'primary_role': 'presales'}
+    block = user['apps']['consultation_agent']
+    assert (block['access'], block['primary_role']) == (True, 'presales')
+    assert block['permissions']['consultation_session']['read'] == ['own']
 
 
 @respx.mock

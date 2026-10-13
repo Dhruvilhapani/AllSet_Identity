@@ -10,13 +10,16 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import replace
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
-from app import capabilities, legacy, profiles, supabase_client
+from app import legacy, policy_db, profiles, supabase_client
 from app.api.deps import Caller, current_caller
 from app.core import config, security
+from app.permissions import cache
+from app.permissions.payload import build_apps, build_payload, identity_from_claims
 
 logger = logging.getLogger(__name__)
 
@@ -84,24 +87,21 @@ def _rate_limit(email: str) -> None:
 def _session_response(session: dict) -> dict:
     """Shape a GoTrue token response for the frontends.
 
-    Roles come from the ACCESS TOKEN, not from the response body's
-    `user.app_metadata`. The Custom Access Token Hook writes into the JWT it
-    mints — it does not touch `auth.users.raw_app_meta_data` — so the body's
-    app_metadata holds only `{provider, providers}` and reading roles from it
-    always yielded an empty set. Broker Tools checks
-    `data.user.apps.broker_tools.access` the instant login returns, so that
-    made every sign-in there fail with "no access".
+    The user block is resolved from the ACCESS TOKEN (its subject, plus its
+    claims for a user the roster does not have yet) and the policy snapshot,
+    never from the response body's `user.app_metadata`: the Custom Access Token
+    Hook writes into the JWT, not into `auth.users.raw_app_meta_data`, so the
+    body's app_metadata holds only `{provider, providers}`. Broker Tools checks
+    `data.user.apps.broker_tools.access` the instant login returns.
 
-    Decoding the token here means this block is derived from exactly the same
-    source as /v1/introspect and /v1/auth/me, which is what lets a client
-    render its UI from the login response without a second call.
+    Resolving it exactly as /v1/introspect and /v1/auth/me do is what lets a
+    client render its UI from the login response without a second call.
     """
     user = session.get('user') or {}
     access_token = session.get('access_token') or ''
 
     try:
         claims = security.verify_access_token(access_token)
-        user_id, email, roles, is_active, full_name, phone = security.claims_to_identity(claims)
     except security.TokenInvalid as exc:
         # Supabase just issued this token, so failing to verify it means the
         # project's signing keys or issuer do not match our configuration.
@@ -113,19 +113,19 @@ def _session_response(session: dict) -> dict:
             'access token hook registration',
         ) from exc
 
+    snapshot = cache.current()
+    identity = identity_from_claims(snapshot, claims)
+    if not identity.full_name:
+        identity = replace(identity, full_name=(user.get('user_metadata') or {}).get('full_name', ''))
+    if not identity.email:
+        identity = replace(identity, email=user.get('email', ''))
+
     return {
         'access_token': access_token,
         'refresh_token': session.get('refresh_token'),
         'token_type': 'bearer',
         'expires_in': session.get('expires_in', config.ACCESS_TOKEN_TTL_SECONDS),
-        'user': capabilities.build_payload(
-            user_id=user_id or user.get('id', ''),
-            email=email or user.get('email', ''),
-            roles=roles,
-            is_active=is_active,
-            full_name=full_name or (user.get('user_metadata') or {}).get('full_name', ''),
-            phone=phone,
-        ),
+        'user': build_payload(snapshot, identity),
     }
 
 
@@ -185,10 +185,11 @@ def _try_legacy_login(email: str, password: str) -> dict | None:
         profiles.upsert(
             user_id=user_id,
             email=email,
-            roles=legacy_user.roles,
             full_name=legacy_user.full_name,
             is_active=True,
         )
+        policy_db.set_user_roles(user_id, legacy_user.roles, actor=None)
+        cache.refresh_quietly()
     profiles.mark_legacy_migrated(user_id)
 
     # Re-authenticate so the returned token carries claims from the hook, which
@@ -226,14 +227,7 @@ def me(caller: Caller = Depends(current_caller)) -> dict:
     Returns exactly what /v1/introspect returns for the same token, so a
     frontend's UI gating and a backend's authorisation cannot drift apart.
     """
-    return capabilities.build_payload(
-        user_id=caller.user_id,
-        email=caller.email,
-        roles=caller.roles,
-        is_active=caller.is_active,
-        full_name=caller.full_name,
-        phone=caller.phone,
-    )
+    return build_payload(cache.current(), caller.identity)
 
 
 @router.post('/password/change', status_code=status.HTTP_204_NO_CONTENT)
@@ -325,28 +319,24 @@ def request_password_reset(payload: PasswordResetRequest) -> dict:
 def list_roles() -> dict:
     """The role vocabulary, for populating admin UI role pickers.
 
-    Served from app/capabilities.py so the two frontends stop hardcoding their
-    own copies of the list — the CMS's admin_ui and Broker Tools' web app each
-    had one, and they disagreed with the backends.
+    Served from the policy snapshot, so every frontend shows the roles admins
+    have defined in the console rather than a hardcoded copy.
     """
+    snapshot = cache.current()
+    roles = sorted(snapshot.roles.values(), key=lambda r: (r.priority, r.key))
     return {
         'roles': [
             {
-                'value': role,
-                'label': capabilities.ROLE_LABELS[role],
-                'apps': [
-                    app for app, caps in
-                    capabilities.build_capabilities([role]).items() if caps['access']
-                ],
-                # The full capability payload for this role in isolation. Sent
-                # so an admin UI can render a permissions reference table
-                # without keeping its own copy of the matrix — both frontends
-                # previously did, and both had drifted from their backends.
-                # Note a user's actual capabilities are the union across all
-                # the roles they hold, not any single entry here.
-                'capabilities': capabilities.build_capabilities([role]),
+                'value': role.key,
+                'label': role.label,
+                'description': role.description,
+                'apps': [app for app, block in build_apps(snapshot, [role.key], is_active=True).items()
+                         if block['access']],
+                # What this role grants on its own. A user's actual access is
+                # the union across every role they hold.
+                'capabilities': build_apps(snapshot, [role.key], is_active=True),
             }
-            for role in capabilities.ALL_ROLES
+            for role in roles
         ],
-        'mutually_exclusive': [sorted(capabilities.DESK_ROLES)],
+        'mutually_exclusive': snapshot.exclusive_groups(),
     }

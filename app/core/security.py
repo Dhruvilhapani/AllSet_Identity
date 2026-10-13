@@ -31,19 +31,37 @@ class ServiceKeyInvalid(Exception):
     """The caller did not present a valid service key."""
 
 
-def check_service_key(presented: str | None) -> None:
+def check_service_key(presented: str | None) -> str | None:
     """Guard for /v1/introspect and other service-to-service endpoints.
+
+    Returns the calling service's name, or None for the shared
+    ALLSET_SERVICE_KEY, which identifies nobody in particular. Keys issued from
+    the admin console are checked against the hashes in the policy snapshot, so
+    a revoked one stops working within POLICY_CACHE_TTL_SECONDS.
 
     Fails closed when ALLSET_SERVICE_KEY is unset, so a misconfigured deploy
     refuses traffic instead of accepting anonymous introspection. Same posture
     as Broker Tools' HasLeadsMasterSyncSecret / HasBrokerToolsServiceSecret.
     """
-    accepted = [key for key in (config.SERVICE_KEY, *config.SERVICE_KEYS.values()) if key]
-    if not accepted:
+    if not (config.SERVICE_KEY or config.SERVICE_KEYS):
         logger.error('no service key is configured; refusing service request')
         raise ServiceKeyInvalid('service authentication is not configured')
-    if not presented or not any(hmac.compare_digest(presented, key) for key in accepted):
+    if not presented:
         raise ServiceKeyInvalid('invalid service key')
+
+    if config.SERVICE_KEY and hmac.compare_digest(presented, config.SERVICE_KEY):
+        return None
+    for name, key in config.SERVICE_KEYS.items():
+        if key and hmac.compare_digest(presented, key):
+            return name
+
+    # Imported here: the cache depends on config, not the other way round.
+    from app.permissions import cache
+
+    service = cache.current().service_for_key(presented)
+    if service is None:
+        raise ServiceKeyInvalid('invalid service key')
+    return service
 
 
 def bearer_token(authorization: str | None) -> str:

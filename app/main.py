@@ -17,8 +17,10 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import admin, auth, introspect
+from app.api.v1 import admin, auth, introspect, services
 from app.core import config
+from app.permissions.cache import PolicyUnavailable
+from app.policy_db import PolicyError
 from app.profiles import ProfileError
 from app.supabase_client import SupabaseError
 
@@ -46,14 +48,16 @@ app.add_middleware(
     # same-origin under dev.allset.in in production, so there is no need to
     # allow credentials — and not allowing them keeps CSRF off the table.
     allow_credentials=False,
-    allow_methods=['GET', 'POST', 'PATCH', 'OPTIONS'],
-    allow_headers=['Authorization', 'Content-Type', 'X-Allset-Service-Key'],
+    allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allow_headers=['Authorization', 'Content-Type', 'X-Allset-Service-Key', 'If-Match'],
+    expose_headers=['ETag'],
 )
 
 v1 = APIRouter(prefix='/v1')
 v1.include_router(auth.router)
 v1.include_router(introspect.router)
 v1.include_router(admin.router)
+v1.include_router(services.router)
 app.include_router(v1)
 
 # Firebase Hosting's `run` rewrite for /identity/** forwards the request path
@@ -78,6 +82,19 @@ def handle_supabase_error(_: Request, exc: SupabaseError) -> JSONResponse:
 @app.exception_handler(ProfileError)
 def handle_profile_error(_: Request, exc: ProfileError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={'detail': exc.message})
+
+
+@app.exception_handler(PolicyError)
+def handle_policy_error(_: Request, exc: PolicyError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={'detail': exc.message})
+
+
+@app.exception_handler(PolicyUnavailable)
+def handle_policy_unavailable(_: Request, exc: PolicyUnavailable) -> JSONResponse:
+    """No policy snapshot could be loaded. A 5xx, which consumers fail closed
+    on, never an answer that could let someone in or lock everyone out."""
+    logger.error('policy snapshot unavailable: %s', exc)
+    return JSONResponse(status_code=503, content={'detail': 'permissions are unavailable'})
 
 
 @app.exception_handler(Exception)

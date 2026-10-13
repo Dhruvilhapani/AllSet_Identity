@@ -145,19 +145,19 @@ CORS_ORIGINS = [
 # this value only mirrors it so clients can report the expiry and schedule
 # refreshes. Changing it here alone changes nothing.
 #
-# The cost is revocation latency, and it is not small. Both `roles` and
-# `is_active` are read from the token's claims — /v1/introspect does no I/O by
-# design — so an access token already in a browser keeps the roles it was minted
-# with until it expires. Revoking sessions kills refresh tokens at once, but
-# nothing here can recall an issued JWT: not a role change, not deactivation,
-# not a password reset. At 30 minutes that window was a nuisance. At 7 days,
-# offboarding is not immediate and should not be assumed to be.
-#
-# The only way to invalidate live access tokens is to rotate the Supabase
-# project's JWT signing key, which signs everyone out at once. If eviction ever
-# needs to be quicker than this without that hammer, the fix is a short access
-# token plus a client refresh loop — see the revocation section in README.md.
+# Revocation no longer waits for the token to expire. Roles, is_active, name and
+# phone are read from the in-memory roster (app/permissions/cache.py), refreshed
+# every POLICY_CACHE_TTL_SECONDS, so a role change or deactivation reaches
+# consumers in about that plus their 60s cache. The token's own claims are used
+# only for a user created after the last refresh. A password reset still cannot
+# recall an issued JWT: the token keeps passing introspect until it expires,
+# only now with whatever roles the roster currently gives its user.
 ACCESS_TOKEN_TTL_SECONDS = _int('ACCESS_TOKEN_TTL_SECONDS', 604800)
+
+# How old the cached policy snapshot may get before a request starts a
+# background refresh. Bounds how long a grant, role or status change takes to
+# reach this instance.
+POLICY_CACHE_TTL_SECONDS = _int('POLICY_CACHE_TTL_SECONDS', 30)
 
 HTTP_TIMEOUT_SECONDS = _int('HTTP_TIMEOUT_SECONDS', 10)
 
