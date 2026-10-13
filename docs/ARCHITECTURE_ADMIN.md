@@ -304,7 +304,7 @@ keep their paths and behaviour.
 
 | Method | Path | Does |
 | --- | --- | --- |
-| GET, POST | `/users` | List (filters `role`, `service`, `active`); invite |
+| GET, POST | `/users` | List (filters `role`, `service`, `active`); create with an admin-chosen password, no email |
 | GET, PATCH | `/users/{id}` | Detail with roles, attributes and effective permissions; edit name and phone |
 | PATCH | `/users/{id}/roles` | Replace roles; revokes sessions |
 | PUT | `/users/{id}/attributes/{service}` | Replace that service's attribute values |
@@ -337,10 +337,10 @@ rewrite. Same origin, so no CORS entry.
 | Page | What the admin does |
 | --- | --- |
 | Sign in | Email and password; anyone without `console.use` sees "no access" |
-| Users | Search and filter; invite |
-| User | Name and phone; roles (a second role from the same exclusive group is refused); per-service attributes such as desk, with a warning when desk and role disagree; activate or deactivate; set a password or send a reset; effective access per service |
+| Users | Search and filter; add a user with a password you choose (no email is sent) |
+| User | Name and phone; roles (a second role from the same exclusive group is refused); per-service attributes such as desk, with a warning when desk and role disagree; activate or deactivate; change the password without the old one, or send a reset; effective access per service |
 | Roles | Create, edit, delete; member counts |
-| Permissions | Pick a service: rows are resource and action, columns are roles, each cell the granted scopes. A review step lists the changes before saving |
+| Permissions | Pick a service: rows are resource and action, columns are roles, each cell the granted scopes. Only roles granted something in that service (and superusers) are shown; **Show all roles** reveals the rest, to grant one. A review step lists the changes before saving |
 | Services | Register; catalogue with retired items; manifest push time; generate and revoke keys |
 | Audit | Who changed what and when |
 

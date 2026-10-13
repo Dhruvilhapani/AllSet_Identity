@@ -146,7 +146,7 @@ in the seed). The console at `/admin` is the main client:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET, POST | `/v1/admin/users` | List (filters `role`, `service`, `active`); invite. |
+| GET, POST | `/v1/admin/users` | List (filters `role`, `service`, `active`); create with the password the admin chose. Nothing is emailed. |
 | GET, PATCH | `/v1/admin/users/{id}` | Detail with effective access per service; edit name and phone. |
 | PATCH | `/v1/admin/users/{id}/roles` | Replace roles. Revokes the target's sessions. You cannot remove your own console access. |
 | PUT | `/v1/admin/users/{id}/attributes/{service}` | Per-service attributes, such as Broker Tools' desk. |
@@ -319,16 +319,15 @@ rather than stubbed.
    from Broker Tools' `team_members`, review and run
    `scripts/backfill_profile_phone.sql` in the SQL editor.
 
-   Each new account is emailed a set-password link and chooses its own
-   password. This retires the hardcoded `Allset@2024` seeds.
+   You choose each new account's password (at least 10 characters) and hand
+   it over privately; nothing is emailed. They can change it after signing in.
+   This retires the hardcoded `Allset@2024` seeds.
 
-   **Known gap:** there is still no page for that emailed link to land on.
-   Neither admin UI has a `/reset-password` route and this service has no
-   `/password/reset-confirm`, so the link redirects to the project's Site URL
-   and nothing completes the flow. Supabase's built-in mailer is also
-   rate-limited to a few messages an hour and is not meant for production, so a
-   burst of invites stops being delivered without reporting an error. Treat the
-   invite email as unreliable and set the password yourself.
+   The console's **Email a reset link** on a user's page still sends Supabase's
+   recovery email, but there is no page for that link to land on yet (neither
+   admin UI has a `/reset-password` route and this service has no
+   `/password/reset-confirm`), and Supabase's built-in mailer is rate-limited
+   to a few messages an hour. Use **Change password** instead.
 
 ## Passwords
 
@@ -337,7 +336,7 @@ Three paths, for three different situations:
 | Situation | Use |
 |---|---|
 | You know your password and want a new one | Broker Tools, either the **key icon in the sidebar** once signed in, or **Change your password** on the sign-in screen. Both ask for the current password; no email or OTP involved. |
-| Someone has forgotten theirs entirely | `scripts/admin_set_password.py` — runs as you, needs admin or tech, no service-role key. |
+| Someone has forgotten theirs entirely | **Change password** on their page in the admin console, or `scripts/admin_set_password.py` — both run as you, need admin or tech, and need no old password and no service-role key. |
 | Nobody can log in at all | `scripts/set_password.py` — straight to Supabase with the service-role key. The bootstrap path for the first admin, and the one that still works when this service is down. |
 
 **Password UI lives only in Broker Tools.** The CMS admin panel signs in with the

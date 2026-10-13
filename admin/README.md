@@ -40,7 +40,7 @@ Set `IDENTITY_URL` to point the dev proxy elsewhere.
 | Path | What |
 | --- | --- |
 | `src/lib/api.ts` | The only code that calls Identity: base path, refresh on 401, error text |
-| `src/lib/matrix.ts` | Permission-matrix editing: toggling scopes, the PUT body, the change list |
+| `src/lib/matrix.ts` | Permission-matrix editing: toggling scopes, which roles to show, the PUT body, the change list |
 | `src/lib/roles.ts` | Exclusive-group role picking, and the desk/role mismatch warning |
 | `src/pages/` | Users, user detail, roles, permissions, services, audit |
 | `src/components/ui.tsx` | Buttons, fields, dialogs, tables, styled like the CMS admin panel |
@@ -51,6 +51,13 @@ Set `IDENTITY_URL` to point the dev proxy elsewhere.
   version it was loaded at. If someone else saved first, the save is refused
   (409) and the admin can reload; nothing is silently overwritten. A background
   refetch never replaces a matrix that has unsaved edits.
+- **The matrix shows only the roles in use** in that service: superusers and
+  roles granted something there. Roles are shared by every service, so the
+  rest (Editor and Viewer in Broker Tools, say) would be empty columns. Tick
+  **Show all roles** to grant one of them something.
+- **New users get the password you type.** Nothing is emailed; hand it over
+  privately. **Change password** on a user's page sets a new one without the
+  old one.
 - **Role changes sign the person out everywhere.** The new access reaches every
   service within about a minute.
 - **A new service key is shown once.** Only its SHA-256 hash is stored.
