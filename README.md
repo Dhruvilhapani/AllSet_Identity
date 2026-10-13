@@ -189,7 +189,9 @@ ruff check .
 ```
 
 The admin console lives in `admin/` (React + Vite); see
-[`admin/README.md`](admin/README.md) to run it against this service.
+[`admin/README.md`](admin/README.md) to run it against this service. To run
+Identity and the console without Supabase credentials, against the real SQL,
+use [`scripts/local_stack/`](scripts/local_stack/README.md).
 
 **The SQL itself** is tested against a real Postgres in `tests/db/`, skipped
 unless you point it at a server it may create a scratch database on:
