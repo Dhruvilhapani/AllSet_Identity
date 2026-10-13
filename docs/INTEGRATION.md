@@ -36,8 +36,9 @@ Step 1 goes straight to Identity or through your backend; see
 | Responsibility | Owned by |
 | --- | --- |
 | Sign-in, passwords, sessions, token signing | Identity |
-| Roles and what each role grants | Identity (`app/capabilities.py`) |
-| Creating users, changing roles, deactivating | Identity admins (CLI or CMS Users & Roles) |
+| Roles and what each role grants | Identity admins, in the admin console's permission matrix |
+| Declaring what your service protects (`identity-manifest.json`) | Your service, pushed on deploy |
+| Creating users, changing roles, deactivating | Identity admins (admin console or CLI) |
 | Reading the `Authorization` header and calling introspect | Your service |
 | Caching introspect results for 60 seconds | Your service |
 | Mapping results to 401 / 403 / 503 | Your service |
@@ -63,9 +64,10 @@ Known URL: `https://allset-identity-gefxdgwgyq-el.a.run.app`, taken from
 WhatsApp Automation's config. Confirm with the Identity owner which environment
 it is, and get the prod URL.
 
-Your key is yours alone. It unlocks only `/v1/introspect` and
-`/v1/introspect/health`, and it can be revoked without touching any other
-service. Never paste it in chat, email, a ticket or a commit.
+Your key is yours alone. It unlocks only `/v1/introspect`,
+`/v1/introspect/health` and pushing your own service's manifest, and it can be
+revoked without touching any other service. Never paste it in chat, email, a
+ticket or a commit.
 
 **Do not ask for, and do not accept:**
 
@@ -78,12 +80,14 @@ service. Never paste it in chat, email, a ticket or a commit.
 
 ### What the Identity owner does
 
-- [ ] Deploy Identity with the `consultation_agent` capability block to each
-      environment. Until then every sign-in to your service fails with "no access"
-- [ ] Generate one key per environment:
-      `python -c "import secrets; print(secrets.token_urlsafe(32))"`
-- [ ] Add `consultation_agent:<key>` to `ALLSET_SERVICE_KEYS` in `.env.dev`, and later `.env.prod`
-- [ ] Run `./scripts/setup_gcp_secrets.sh dev`, then `./deploy.sh dev` from a committed tree
+- [ ] In the admin console (`/admin` on each environment), register your
+      service under Services if it is new, and grant its permissions to the
+      right roles under Permissions. Until a role holds your `app.use`, every
+      sign-in to your service fails with "no access"
+- [ ] Generate a key for your service on its Services page, once per
+      environment. The console shows it once; it is stored only as a hash
+- [ ] (Older alternative: add `<service>:<key>` to `ALLSET_SERVICE_KEYS` in
+      `.env.dev` / `.env.prod`, run `./scripts/setup_gcp_secrets.sh`, redeploy.)
 - [ ] Store the same key as a secret in your service's GCP project; grant your
       runtime service account `roles/secretmanager.secretAccessor` on it
 - [ ] If your browser calls Identity directly, add your frontend's origin to
@@ -142,35 +146,45 @@ Content-Type: application/json
   "user_id": "6f1c2a9e-0b7d-4c3e-9a51-2d8e7f4b1c06",
   "email": "someone@allset.in",
   "full_name": "Some One",
+  "phone": "+91 98765 43210",
   "roles": ["presales", "viewer"],
   "role_labels": ["Pre-sales", "Viewer"],
   "is_active": true,
   "apps": {
-    "cms": {
-      "access": true,
-      "primary_role": "viewer",
-      "can_add_property": false,
-      "can_edit_property": false,
-      "can_publish": false,
-      "can_upload_media": false,
-      "can_edit_seo": false,
-      "can_delete_property": false,
-      "can_manage_users": false
-    },
     "broker_tools": {
       "access": true,
       "primary_role": "presales",
+      "permissions": {
+        "lead": {"create": ["all"], "read": ["own_presales"], "update": ["own_presales"]},
+        "lead_note": {"create": ["via_lead"], "read": ["via_lead"], "update": ["via_lead"]},
+        "report": {"read": ["own", "own_team_aggregate"]}
+      },
+      "attributes": {"desk": "presales"},
       "unrestricted_leads": false,
       "own_presales": true,
       "own_sales": false
     },
     "consultation_agent": {
       "access": true,
-      "primary_role": "presales"
-    }
+      "primary_role": "presales",
+      "permissions": {
+        "consultation_session": {"create": ["all"], "read": ["own"], "update": ["own"], "analyze": ["all"]},
+        "buyer": {"create": ["all"], "read": ["all"], "update": ["all"]}
+      },
+      "attributes": {}
+    },
+    "cms": {"access": true, "primary_role": "viewer", "permissions": {"property": {"read": ["all"]}}, "…": "…"},
+    "wa_automation": {"access": true, "…": "…"},
+    "identity": {"access": false, "…": "…"}
   }
 }
 ```
+
+The `permissions` lists are shortened here. There is one block per registered
+service, and each block's `permissions` lists every action that user may take
+in that service. The `unrestricted_leads` / `own_*` and CMS `can_*` flags are
+**legacy**: Identity keeps emitting them until every service has moved to
+`permissions`, then removes them. Do not start reading them.
 
 `user_id` is the stable Supabase UUID. Key your own records on it rather than on
 email.
@@ -332,68 +346,111 @@ async def list_things(user: dict = Depends(current_user)):
 
 ## Authorisation
 
-Decide who gets in from `apps.consultation_agent.access`, and which leads they
-see from the `apps.broker_tools` flags. Never decide from role names. Both are
-computed in one place, [`app/capabilities.py`](../app/capabilities.py), so every
-app reaches the same verdict for the same person.
+Decide everything from your own block, `apps.<your service>`: `access` for
+"may use the service at all", and `permissions` for what they may do and to
+which rows. Never decide from role names: roles are admin-editable data, and
+what each one grants changes in the admin console without a deploy.
 
-### Who gets in
+### Permissions and scopes
 
-| Role | Label | In your service | Flag that is true |
-| --- | --- | --- | --- |
-| `admin` | Admin | All leads | `unrestricted_leads` |
-| `tech` | Tech | All leads | `unrestricted_leads` |
-| `lead_manager` | Lead Manager | All leads | `unrestricted_leads` |
-| `presales` | Pre-sales | Own leads, by presales owner | `own_presales` |
-| `sales` | Sales | Own leads, by sales owner | `own_sales` |
-| `manager`, `editor`, `viewer` | CMS roles | No access, 403 | none; `access` is false |
+`permissions` maps a resource to its actions, and each action to the scopes
+granted:
 
-A user holds a set of roles, and their capabilities are the union.
-`{sales, viewer}` gets own sales leads here plus read-only CMS. Identity
-guarantees nobody holds both `presales` and `sales`.
+- **An action that is absent is denied.** There is no "default allow".
+- **`["all"]`** means every row.
+- **Named scopes** (`own`, `own_presales`, `assigned`, …) each name a row filter
+  your service implements. Several scopes combine with OR.
+- **An unknown scope name matches nothing**, and an empty filter is a denial,
+  never an unfiltered query.
 
-### The `consultation_agent` block
+`admin` is a superuser: every action at `all` in every service. Everyone else
+gets exactly what their roles are granted in the matrix.
 
-| Field | Type | Use it for |
-| --- | --- | --- |
-| `access` | bool | Whether to let them in at all. `current_user` already checks it. |
-| `primary_role` | string or null | Display and audit columns only, never access. Precedence: admin, tech, lead_manager, presales, sales. |
+Copy this helper (adapt it to your stack) rather than writing ad-hoc checks:
 
-### Lead scope: the `broker_tools` flags
+```python
+def scopes(user: dict, resource: str, action: str) -> list[str]:
+    return user["apps"]["consultation_agent"]["permissions"].get(resource, {}).get(action, [])
 
-If your service shows leads, scope them with these flags from the same
-response. They describe the same person under the rules Broker Tools applies.
 
-| Field | Type | Use it for |
-| --- | --- | --- |
-| `unrestricted_leads` | bool | Check first. True means no ownership filter. |
-| `own_presales` | bool | Only matters when `unrestricted_leads` is false. Filter by presales owner. |
-| `own_sales` | bool | Only matters when `unrestricted_leads` is false. Filter by sales owner. |
+def require(user: dict, resource: str, action: str) -> list[str]:
+    granted = scopes(user, resource, action)
+    if not granted:
+        raise HTTPException(403, "You do not have permission to do that.")
+    return granted
 
-### Applying it to lead data
 
-1. `unrestricted_leads` is true: return everything.
-2. `own_presales` is true: return leads where `fk_presales_owner` is this person.
-3. `own_sales` is true: return leads where `fk_sales_owner` is this person.
-4. None of these: return nothing. Do not fall back to all leads.
+def visible(granted: list[str], row, handlers) -> bool:
+    if "all" in granted:
+        return True
+    return any(handlers[name](row) for name in granted if name in handlers)
+```
 
-The owner columns point at `team_members.id` in the call_logs database, which
-Identity does not know. WhatsApp Automation looks up the `team_members` row by
-the introspected email. If no row matches, show nothing.
+Add a test that every scope your manifest declares has a handler in your code.
 
-If you need a distinction the flags do not express, such as "only lead managers
-may export", ask the Identity owner to add a capability. Do not start reading
-`roles` yourself; that is how the old apps' permission rules drifted apart.
+### Telling Identity what you protect: the manifest
 
-`GET {IDENTITY_SERVICE_URL}/v1/auth/roles` needs no auth and returns the full
-role vocabulary with each role's capabilities, if you want a reference in your
-UI.
+Your service declares its resources, actions and scopes in
+`identity-manifest.json` at the root of your repo, next to the code that
+enforces them. Consultation Agent's (also in Identity's seed,
+`app/permissions/seed/services/consultation_agent.json`):
+
+```json
+{
+  "service": "consultation_agent",
+  "resources": {
+    "consultation_session": {"label": "Consultation sessions",
+                             "actions": ["create", "read", "update", "analyze"],
+                             "scopes": {"own": "Their own sessions"}},
+    "buyer": {"label": "Buyers", "actions": ["read", "create", "update"]}
+  }
+}
+```
+
+Every resource also gets the scope `all`, and every service the resource `app`
+with action `use` (that is `access`); never declare those. Push the file after
+each deploy, with your own key:
+
+```http
+PUT {IDENTITY_SERVICE_URL}/v1/services/manifest
+X-Allset-Service-Key: <IDENTITY_SERVICE_KEY>
+Content-Type: application/json
+
+<the contents of identity-manifest.json>
+```
+
+A push adds what is new (granted to nobody but `admin` until someone ticks it
+in the console), relabels what changed, and **retires** anything missing; it
+never grants or removes anyone's access. The shared `ALLSET_SERVICE_KEY` cannot
+push, because it identifies no service.
+
+### Matching the person to your own records
+
+Key your records on `user_id`. Consultation Agent is the one exception: it finds
+the signed-in person's `brokers` document by `phone` (top level), matched on
+the last 10 digits, because it is passed through exactly as an admin typed it
+(`+91 98765 43210`, `9876543210`). It is empty when the profile has no phone.
+Admins set it in the console or with `scripts/manage_users.py phone`. Identity
+reads it from its roster, so a change reaches you within about 90 seconds.
+
+### Attributes
+
+Some services declare per-user attributes in their manifest; admins set the
+values in the console, and they arrive in `apps.<service>.attributes`. Broker
+Tools' `desk` (presales or sales) is one. Broker Tools also reads every member's
+desk in SQL, from the `identity_user_attribute_values` view in the shared
+call_logs database.
+
+`GET {IDENTITY_SERVICE_URL}/v1/auth/roles` needs no auth and returns the roles
+admins have defined, with what each grants on its own, if you want a reference
+in your UI.
 
 ## Signing users in
 
-Which path Consultation Agent's sign-in takes is not settled yet. Both work.
-Pick one and tell the Identity owner, because the browser path may need a change
-on their side.
+Consultation Agent's backend proxies sign-in (decided 2026-10-12): its
+frontend posts email and password to its own backend, which calls Identity
+server-to-server, so Identity needs no CORS change. The browser path is
+described too, for other services.
 
 | | Your backend proxies sign-in | Your browser calls Identity |
 | --- | --- | --- |

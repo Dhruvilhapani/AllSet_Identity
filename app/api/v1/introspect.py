@@ -1,10 +1,10 @@
 """The hot path.
 
-Every authenticated request in both Django backends and Broker Tools' FastAPI
-service lands here. It is therefore built to do no I/O at all: the token's
-signature is checked against in-memory JWKS and the role set is read from the
-`app_metadata` claim written by the Custom Access Token Hook. No Supabase call,
-no database query.
+Every authenticated request in every consuming service lands here. It is
+therefore built to do no I/O per request: the token's signature is checked
+against in-memory JWKS, and the caller's roles, status and permissions come from
+the in-memory policy snapshot (app/permissions/cache.py), refreshed in the
+background. No Supabase call, no database query.
 
 Consumers cache the response for 60 seconds keyed on a hash of the token, so in
 steady state most requests do not even reach this service.
@@ -15,9 +15,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 
-from app import capabilities
 from app.api.deps import require_service_key
 from app.core import security
+from app.permissions import cache
+from app.permissions.payload import build_payload, identity_from_claims, inactive_apps
 
 router = APIRouter(tags=['introspect'])
 
@@ -34,7 +35,11 @@ def introspect(payload: IntrospectRequest) -> dict:
     as `{"active": false}` rather than an error status, so a consumer can tell
     "this token is no good" apart from "the identity service is broken" — the
     latter must fail closed, the former is a routine 401 for the end user.
+
+    A snapshot that cannot be loaded at all is a 5xx (PolicyUnavailable,
+    handled in app/main.py), never `active: false`.
     """
+    snapshot = cache.current()
     try:
         claims = security.verify_access_token(payload.token)
     except security.TokenInvalid as exc:
@@ -42,21 +47,20 @@ def introspect(payload: IntrospectRequest) -> dict:
             'active': False,
             'reason': str(exc),
             'roles': [],
-            'apps': capabilities.build_capabilities([], is_active=False),
+            'apps': inactive_apps(snapshot),
         }
 
-    user_id, email, roles, is_active, full_name = security.claims_to_identity(claims)
-
-    return capabilities.build_payload(
-        user_id=user_id,
-        email=email,
-        roles=roles,
-        is_active=is_active,
-        full_name=full_name,
-    )
+    return build_payload(snapshot, identity_from_claims(snapshot, claims))
 
 
 @router.get('/introspect/health', status_code=status.HTTP_200_OK)
-def introspect_health(_: None = Depends(require_service_key)) -> dict:
-    """Lets a consumer verify its service key is correct without a user token."""
-    return {'status': 'ok'}
+def introspect_health(service: str | None = Depends(require_service_key)) -> dict:
+    """Lets a consumer verify its service key is correct without a user token,
+    and see whether this instance has a policy snapshot to answer from."""
+    age = cache.age_seconds()
+    return {
+        'status': 'ok',
+        'service': service,
+        'policy_loaded': age is not None,
+        'policy_age_seconds': None if age is None else round(age, 1),
+    }

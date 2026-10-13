@@ -254,7 +254,7 @@ def test_introspect_and_me_agree_for_the_same_token(
 ):
     """The contract that keeps a frontend's UI gating from drifting away from a
     backend's authorisation."""
-    token = make_token(roles=['manager', 'presales'])
+    token = make_token(roles=['manager', 'presales'], phone='+91 98765 43210')
 
     introspected = introspect(client, token, service_headers).json()
     me = client.get('/v1/auth/me', headers={'Authorization': f'Bearer {token}'}).json()
@@ -262,3 +262,23 @@ def test_introspect_and_me_agree_for_the_same_token(
     assert introspected['apps'] == me['apps']
     assert introspected['roles'] == me['roles']
     assert introspected['user_id'] == me['user_id']
+    assert introspected['phone'] == me['phone'] == '+91 98765 43210'
+
+
+def test_phone_comes_from_the_token_as_stored(
+    client, service_headers, make_token, jwks_mock
+):
+    """Consultation Agent finds a user's broker profile by this. It is passed
+    through unnormalised; the consumer normalises."""
+    token = make_token(roles=['presales'], phone='+91 98765 43210')
+    assert introspect(client, token, service_headers).json()['phone'] == '+91 98765 43210'
+
+
+def test_token_without_a_phone_claim_reports_an_empty_phone(
+    client, service_headers, make_token, jwks_mock
+):
+    """Tokens minted before the hook stamped phone keep working until they
+    expire; they just carry no phone."""
+    body = introspect(client, make_token(roles=['presales']), service_headers).json()
+    assert body['active'] is True
+    assert body['phone'] == ''

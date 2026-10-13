@@ -1,0 +1,14 @@
+{
+  "service": "cms",
+  "name": "CMS",
+  "description": "Property listings, media and SEO for the public site",
+  "resources": {
+    "property": {
+      "label": "Properties",
+      "actions": ["create", "read", "update", "delete", "publish", "update_seo", "view_internal"]
+    },
+    "developer": {"label": "Developers", "actions": ["create", "read", "update", "delete"]},
+    "amenity": {"label": "Amenities", "actions": ["read"]},
+    "media": {"label": "Media library", "actions": ["create", "read", "update", "delete"]}
+  }
+}

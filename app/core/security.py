@@ -31,19 +31,37 @@ class ServiceKeyInvalid(Exception):
     """The caller did not present a valid service key."""
 
 
-def check_service_key(presented: str | None) -> None:
+def check_service_key(presented: str | None) -> str | None:
     """Guard for /v1/introspect and other service-to-service endpoints.
+
+    Returns the calling service's name, or None for the shared
+    ALLSET_SERVICE_KEY, which identifies nobody in particular. Keys issued from
+    the admin console are checked against the hashes in the policy snapshot, so
+    a revoked one stops working within POLICY_CACHE_TTL_SECONDS.
 
     Fails closed when ALLSET_SERVICE_KEY is unset, so a misconfigured deploy
     refuses traffic instead of accepting anonymous introspection. Same posture
     as Broker Tools' HasLeadsMasterSyncSecret / HasBrokerToolsServiceSecret.
     """
-    accepted = [key for key in (config.SERVICE_KEY, *config.SERVICE_KEYS.values()) if key]
-    if not accepted:
+    if not (config.SERVICE_KEY or config.SERVICE_KEYS):
         logger.error('no service key is configured; refusing service request')
         raise ServiceKeyInvalid('service authentication is not configured')
-    if not presented or not any(hmac.compare_digest(presented, key) for key in accepted):
+    if not presented:
         raise ServiceKeyInvalid('invalid service key')
+
+    if config.SERVICE_KEY and hmac.compare_digest(presented, config.SERVICE_KEY):
+        return None
+    for name, key in config.SERVICE_KEYS.items():
+        if key and hmac.compare_digest(presented, key):
+            return name
+
+    # Imported here: the cache depends on config, not the other way round.
+    from app.permissions import cache
+
+    service = cache.current().service_for_key(presented)
+    if service is None:
+        raise ServiceKeyInvalid('invalid service key')
+    return service
 
 
 def bearer_token(authorization: str | None) -> str:
@@ -163,8 +181,11 @@ def verify_access_token(token: str) -> dict:
     return claims
 
 
-def claims_to_identity(claims: dict) -> tuple[str, str, list[str], bool, str]:
-    """Extract (user_id, email, roles, is_active, full_name) from verified claims.
+def claims_to_identity(claims: dict) -> tuple[str, str, list[str], bool, str, str]:
+    """Extract (user_id, email, roles, is_active, full_name, phone) from verified claims.
+
+    phone is empty for a token minted before the hook started stamping it, and
+    for a profile with no phone on record.
 
     Roles come from app_metadata, written by the Custom Access Token Hook. A
     token with no app_metadata.roles predates the hook or belongs to a user with
@@ -198,4 +219,5 @@ def claims_to_identity(claims: dict) -> tuple[str, str, list[str], bool, str]:
         sorted(roles),
         bool(app_metadata.get('is_active', False)),
         app_metadata.get('full_name') or '',
+        app_metadata.get('phone') or '',
     )

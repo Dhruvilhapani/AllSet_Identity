@@ -83,6 +83,7 @@ def make_token(rsa_keypair):
         audience='authenticated',
         include_app_metadata=True,
         key=None,
+        phone=None,
     ):
         now = int(time.time())
         claims = {
@@ -100,6 +101,10 @@ def make_token(rsa_keypair):
                 'is_active': is_active,
                 'full_name': full_name,
             }
+            # None leaves the claim out, as in a token minted before the hook
+            # started stamping phone.
+            if phone is not None:
+                claims['app_metadata']['phone'] = phone
 
         if algorithm == 'HS256':
             signing_key = key or JWT_SECRET
@@ -144,3 +149,24 @@ def client():
 @pytest.fixture
 def service_headers():
     return {'X-Allset-Service-Key': SERVICE_KEY}
+
+
+@pytest.fixture(autouse=True)
+def policy_snapshot(monkeypatch):
+    """Every test answers from the seeded policy (app/permissions/seed/), with
+    no network call.
+
+    The roster starts empty and the load time at 0, so a token's own claims
+    decide its roles, exactly as for a user created after the last refresh.
+    Tests about the roster add entries to `policy_snapshot.users`. A reload
+    (an admin write, or a read an admin acts on) returns this same object.
+    """
+    from app.permissions import cache
+    from app.permissions.catalogue import seed_snapshot
+    from app.permissions.snapshot import Snapshot
+
+    snapshot = Snapshot.from_json(seed_snapshot())
+    cache.install(snapshot)
+    monkeypatch.setattr(cache, '_fetch', lambda: snapshot)
+    yield snapshot
+    cache.install(None)
