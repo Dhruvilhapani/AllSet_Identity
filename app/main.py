@@ -17,6 +17,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app import console
 from app.api.v1 import admin, auth, introspect, services
 from app.core import config
 from app.permissions.cache import PolicyUnavailable
@@ -65,6 +66,9 @@ app.include_router(v1)
 # rewrite), so the same routes must also answer under /identity/v1/... for
 # browser calls made through that same-origin path in production.
 app.include_router(v1, prefix='/identity')
+
+# The admin console, when it has been built (Dockerfile does; see admin/).
+console.mount(app)
 
 
 @app.get('/health', tags=['health'])
