@@ -7,7 +7,9 @@ credentials, against the real SQL:
   PostgREST behind `/rest/v1` on `localhost:54321`, as Supabase serves it.
 - `run_identity.py` runs the real Identity app against it on port 8100, with
   only Supabase Auth stubbed. Sign-in accepts any seeded user with the password
-  printed at startup; the token's claims come from the real access-token hook.
+  printed at startup, and anyone whose password you set in the console with
+  that password, until you restart it; the token's claims come from the real
+  access-token hook.
 - `down.sh` removes it.
 
 ```bash

@@ -1,9 +1,10 @@
 """Run Identity against the local stack from up.sh, with Supabase Auth stubbed.
 
 Everything is the real code except Supabase Auth (GoTrue): sign-in accepts any
-seeded user with the password below and mints an HS256 token whose claims come
-from the REAL custom_access_token_hook in the local Postgres. PostgREST, the SQL
-functions, the policy cache, the admin API and the console are what run.
+seeded user with the password below, or the password an admin set in the
+console (kept in memory until restart), and mints an HS256 token whose claims
+come from the REAL custom_access_token_hook in the local Postgres. PostgREST,
+the SQL functions, the policy cache, the admin API and the console are what run.
 
     pip install -r requirements-dev.txt -r requirements-legacy.txt   # psycopg2
     scripts/local_stack/up.sh
@@ -55,6 +56,8 @@ import psycopg2  # noqa: E402
 from app import supabase_client  # noqa: E402
 from app.core import config  # noqa: E402
 
+_passwords: dict[str, str] = {}  # user_id -> password set through the admin API
+
 db = psycopg2.connect(host='localhost', port=55433, user='postgres', password='local', dbname='postgres')
 db.autocommit = True
 
@@ -77,8 +80,8 @@ def _session(user_id: str, email: str) -> dict:
 
 def sign_in_with_password(email: str, password: str) -> dict:
     rows = _query('select id::text from auth.users where lower(email) = lower(%s)', email)
-    if not rows or password != PASSWORD:
-        raise supabase_client.InvalidCredentials('invalid email or password', status_code=401)
+    if not rows or password != _passwords.get(rows[0][0], PASSWORD):
+        raise supabase_client.InvalidCredentials('invalid email or password')
     return _session(rows[0][0], email)
 
 
@@ -86,14 +89,21 @@ def refresh_session(refresh_token: str) -> dict:
     user_id = refresh_token.removeprefix('refresh:')
     rows = _query('select email from auth.users where id = %s::uuid', user_id)
     if not rows:
-        raise supabase_client.InvalidCredentials('invalid refresh token', status_code=401)
+        raise supabase_client.InvalidCredentials('invalid refresh token')
     return _session(user_id, rows[0][0])
 
 
 def admin_create_user(email: str, password: str | None, *, full_name: str = '') -> dict:
     user_id = str(uuid.uuid4())
     _query('insert into auth.users (id, email) values (%s::uuid, %s)', user_id, email)
+    if password:
+        _passwords[user_id] = password
     return {'id': user_id, 'email': email}
+
+
+def admin_set_password(user_id: str, password: str) -> dict:
+    _passwords[user_id] = password
+    return {'id': user_id}
 
 
 def admin_get_user_by_email(email: str) -> dict | None:
@@ -106,7 +116,7 @@ supabase_client.refresh_session = refresh_session
 supabase_client.sign_out = lambda token: None
 supabase_client.admin_create_user = admin_create_user
 supabase_client.admin_get_user_by_email = admin_get_user_by_email
-supabase_client.admin_set_password = lambda user_id, password: {'id': user_id}
+supabase_client.admin_set_password = admin_set_password
 supabase_client.send_recovery_email = lambda email: print(f'[local] would email a reset link to {email}')
 
 if __name__ == '__main__':
