@@ -221,7 +221,7 @@ def test_saving_the_matrix_sends_the_expected_version(client, make_token, jwks_m
 @respx.mock
 def test_a_stale_matrix_save_is_a_409(client, make_token, jwks_mock):
     respx.post(f'{RPC}/identity_set_service_grants').mock(return_value=Response(400, json={
-        'code': '40001', 'message': 'these permissions were changed by someone else; reload and try again'}))
+        'code': 'PT409', 'message': 'these permissions were changed by someone else; reload and try again'}))
     response = client.put('/v1/admin/services/cms/grants', json={'grants': {}},
                           headers={**auth(make_token(roles=['admin'])), 'If-Match': '"1"'})
     assert response.status_code == 409

@@ -14,7 +14,11 @@
 -- They raise:
 --   22023  a request that can never succeed as sent      -> HTTP 400
 --   P0002  the thing it names does not exist             -> HTTP 404
---   40001  someone else changed it first; reload, retry  -> HTTP 409
+--   PT409  someone else changed it first; reload, retry  -> HTTP 409
+--
+-- PT409 and not 40001 (serialization_failure): PostgREST retries a transaction
+-- that fails with 40001, so a stale write would be retried forever. A PTxxx
+-- code is PostgREST's own convention for "answer with HTTP xxx".
 --
 -- Idempotent: safe to re-run.
 
@@ -695,7 +699,7 @@ begin
         raise exception using errcode = '22023', message = 'grants for ' || p_service || ' cannot be edited';
     end if;
     if p_expected_version is not null and p_expected_version <> v_service.grants_version then
-        raise exception using errcode = '40001',
+        raise exception using errcode = 'PT409',
             message = 'these permissions were changed by someone else; reload and try again';
     end if;
     if jsonb_typeof(coalesce(p_grants, '{}'::jsonb)) <> 'object' then

@@ -161,7 +161,7 @@ def test_attributes_are_validated_set_and_readable_through_the_view(db):
 
 def test_grant_edits_are_checked(db):
     assert one(db, "select grants_version from identity_services where key = 'cms'") == 1
-    raises(db, '40001', "select identity_set_service_grants('cms', '{}', 0, null)")
+    raises(db, 'PT409', "select identity_set_service_grants('cms', '{}', 0, null)")
     raises(db, '22023', "select identity_set_service_grants('identity', '{}', null, null)", contains='cannot be edited')
     raises(db, '22023', """select identity_set_service_grants('cms', '{"admin": {"property": {"read": ["all"]}}}', null, null)""",
            contains='superuser')

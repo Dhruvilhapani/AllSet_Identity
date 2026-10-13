@@ -6,7 +6,7 @@ signal refusals with SQLSTATEs that map straight onto HTTP:
 
     22023  invalid request              -> 400
     P0002  not found                    -> 404
-    40001  someone else changed it      -> 409
+    PT409  someone else changed it      -> 409 (not 40001, which PostgREST retries)
     23505  would break a unique rule    -> 409 (e.g. two roles of one group)
 """
 
@@ -25,7 +25,7 @@ _STATUS_BY_SQLSTATE = {
     '22023': 400,
     '23514': 400,
     'P0002': 404,
-    '40001': 409,
+    'PT409': 409,
     '23505': 409,
 }
 
