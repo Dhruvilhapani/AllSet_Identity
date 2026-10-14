@@ -1,0 +1,198 @@
+{
+  "_comment": [
+    "Initial grants: service -> role -> resource -> action -> scopes.",
+    "\"*\" as an action means every action the resource declares.",
+    "admin is a superuser and needs no grants. These reproduce what each service enforces today",
+    "(see docs/ARCHITECTURE_ADMIN.md); tests/test_permissions_equivalence.py pins the legacy flags."
+  ],
+  "identity": {
+    "tech": {"app": {"use": ["all"]}, "console": {"use": ["all"]}}
+  },
+  "cms": {
+    "tech": {
+      "app": {"use": ["all"]},
+      "property": {"*": ["all"]},
+      "developer": {"*": ["all"]},
+      "amenity": {"*": ["all"]},
+      "media": {"*": ["all"]}
+    },
+    "manager": {
+      "app": {"use": ["all"]},
+      "property": {"create": ["all"], "read": ["all"], "update": ["all"], "publish": ["all"],
+                   "update_seo": ["all"], "view_internal": ["all"]},
+      "developer": {"*": ["all"]},
+      "amenity": {"*": ["all"]},
+      "media": {"*": ["all"]}
+    },
+    "editor": {
+      "app": {"use": ["all"]},
+      "property": {"create": ["all"], "read": ["all"], "update": ["all"], "publish": ["all"],
+                   "update_seo": ["all"], "view_internal": ["all"]},
+      "developer": {"*": ["all"]},
+      "amenity": {"*": ["all"]},
+      "media": {"*": ["all"]}
+    },
+    "viewer": {
+      "app": {"use": ["all"]},
+      "property": {"read": ["all"], "view_internal": ["all"]},
+      "developer": {"read": ["all"]},
+      "amenity": {"read": ["all"]},
+      "media": {"read": ["all"]}
+    },
+    "lead_manager": {"property": {"view_internal": ["all"]}},
+    "presales": {"property": {"view_internal": ["all"]}},
+    "sales": {"property": {"view_internal": ["all"]}}
+  },
+  "broker_tools": {
+    "tech": {
+      "app": {"use": ["all"]},
+      "lead": {"*": ["all"]},
+      "lead_note": {"*": ["all"]},
+      "lead_call": {"*": ["all"]},
+      "lead_requirement": {"*": ["all"]},
+      "lead_recommendation": {"*": ["all"]},
+      "lead_shared_option": {"*": ["all"]},
+      "lead_consultation": {"*": ["all"]},
+      "lead_site_visit": {"*": ["all"]},
+      "lead_whatsapp": {"*": ["all"]},
+      "lead_task": {"*": ["all"]},
+      "report": {"*": ["all"]},
+      "daily_remark": {"*": ["own"]},
+      "reference": {"*": ["all"]},
+      "property": {"*": ["all"]},
+      "brochure": {"*": ["all"]},
+      "ai_chat": {"*": ["all"]}
+    },
+    "lead_manager": {
+      "app": {"use": ["all"]},
+      "lead": {"*": ["all"]},
+      "lead_note": {"*": ["all"]},
+      "lead_call": {"*": ["all"]},
+      "lead_requirement": {"*": ["all"]},
+      "lead_recommendation": {"*": ["all"]},
+      "lead_shared_option": {"*": ["all"]},
+      "lead_consultation": {"*": ["all"]},
+      "lead_site_visit": {"*": ["all"]},
+      "lead_whatsapp": {"*": ["all"]},
+      "lead_task": {"*": ["all"]},
+      "report": {"*": ["all"]},
+      "daily_remark": {"*": ["own"]},
+      "reference": {"*": ["all"]},
+      "property": {"*": ["all"]},
+      "brochure": {"*": ["all"]},
+      "ai_chat": {"*": ["all"]}
+    },
+    "presales": {
+      "app": {"use": ["all"]},
+      "lead": {"create": ["all"], "sync": ["all"], "read": ["own_presales"], "update": ["own_presales"],
+               "assign": ["own_presales"]},
+      "lead_note": {"*": ["via_lead"]},
+      "lead_call": {"*": ["via_lead"]},
+      "lead_requirement": {"*": ["via_lead"]},
+      "lead_recommendation": {"*": ["via_lead"]},
+      "lead_shared_option": {"*": ["via_lead"]},
+      "lead_consultation": {"*": ["via_lead"]},
+      "lead_site_visit": {"*": ["via_lead"]},
+      "lead_whatsapp": {"*": ["via_lead"]},
+      "lead_task": {"read": ["assigned"], "close": ["assigned"], "create": ["via_lead"]},
+      "report": {"read": ["own", "own_team_aggregate"]},
+      "daily_remark": {"*": ["own"]},
+      "reference": {"*": ["all"]},
+      "property": {"*": ["all"]},
+      "brochure": {"*": ["all"]},
+      "ai_chat": {"*": ["all"]}
+    },
+    "sales": {
+      "app": {"use": ["all"]},
+      "lead": {"create": ["all"], "sync": ["all"], "read": ["own_sales"], "update": ["own_sales"],
+               "assign": ["own_sales"]},
+      "lead_note": {"*": ["via_lead"]},
+      "lead_call": {"*": ["via_lead"]},
+      "lead_requirement": {"*": ["via_lead"]},
+      "lead_recommendation": {"*": ["via_lead"]},
+      "lead_shared_option": {"*": ["via_lead"]},
+      "lead_consultation": {"*": ["via_lead"]},
+      "lead_site_visit": {"*": ["via_lead"]},
+      "lead_whatsapp": {"*": ["via_lead"]},
+      "lead_task": {"read": ["assigned"], "close": ["assigned"], "create": ["via_lead"]},
+      "report": {"read": ["own", "own_team_aggregate"]},
+      "daily_remark": {"*": ["own"]},
+      "reference": {"*": ["all"]},
+      "property": {"*": ["all"]},
+      "brochure": {"*": ["all"]},
+      "ai_chat": {"*": ["all"]}
+    }
+  },
+  "wa_automation": {
+    "tech": {
+      "app": {"use": ["all"]},
+      "lead": {"*": ["all"]},
+      "prompt": {"read": ["own"], "update": ["own"], "reset": ["own"]},
+      "agent_models": {"read": ["own"], "update": ["own"]}
+    },
+    "lead_manager": {
+      "app": {"use": ["all"]},
+      "lead": {"*": ["all"]},
+      "handover_global": {"update": ["all"]},
+      "prompt": {"read": ["own"], "update": ["own"], "reset": ["own"]},
+      "agent_models": {"read": ["own"], "update": ["own"]},
+      "whatsapp_number": {"*": ["all"]},
+      "whatsapp_template": {"*": ["all"]},
+      "meta_ads": {"read": ["all"], "generate_insights": ["all"]}
+    },
+    "presales": {
+      "app": {"use": ["all"]},
+      "lead": {"*": ["assigned_presales", "own_test_identity"]},
+      "prompt": {"read": ["own"], "update": ["own"], "reset": ["own"]},
+      "agent_models": {"read": ["own"], "update": ["own"]}
+    },
+    "sales": {
+      "app": {"use": ["all"]},
+      "lead": {"*": ["assigned_sales", "own_test_identity"]},
+      "prompt": {"read": ["own"], "update": ["own"], "reset": ["own"]},
+      "agent_models": {"read": ["own"], "update": ["own"]}
+    }
+  },
+  "consultation_agent": {
+    "tech": {
+      "app": {"use": ["all"]},
+      "consultation_session": {"create": ["all"], "read": ["own"], "update": ["own"], "analyze": ["all"]},
+      "recording": {"*": ["own"]},
+      "itinerary": {"*": ["own"]},
+      "buyer": {"*": ["all"]},
+      "property": {"*": ["all"]},
+      "wishlist": {"*": ["all"]},
+      "visit_feedback": {"*": ["all"]}
+    },
+    "lead_manager": {
+      "app": {"use": ["all"]},
+      "consultation_session": {"create": ["all"], "read": ["own"], "update": ["own"], "analyze": ["all"]},
+      "recording": {"*": ["own"]},
+      "itinerary": {"*": ["own"]},
+      "buyer": {"*": ["all"]},
+      "property": {"*": ["all"]},
+      "wishlist": {"*": ["all"]},
+      "visit_feedback": {"*": ["all"]}
+    },
+    "presales": {
+      "app": {"use": ["all"]},
+      "consultation_session": {"create": ["all"], "read": ["own"], "update": ["own"], "analyze": ["all"]},
+      "recording": {"*": ["own"]},
+      "itinerary": {"*": ["own"]},
+      "buyer": {"*": ["all"]},
+      "property": {"*": ["all"]},
+      "wishlist": {"*": ["all"]},
+      "visit_feedback": {"*": ["all"]}
+    },
+    "sales": {
+      "app": {"use": ["all"]},
+      "consultation_session": {"create": ["all"], "read": ["own"], "update": ["own"], "analyze": ["all"]},
+      "recording": {"*": ["own"]},
+      "itinerary": {"*": ["own"]},
+      "buyer": {"*": ["all"]},
+      "property": {"*": ["all"]},
+      "wishlist": {"*": ["all"]},
+      "visit_feedback": {"*": ["all"]}
+    }
+  }
+}

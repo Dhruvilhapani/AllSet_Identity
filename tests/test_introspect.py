@@ -45,6 +45,42 @@ def test_unset_service_key_fails_closed(client, monkeypatch):
     assert response.status_code == 401
 
 
+def test_per_consumer_key_is_accepted_alongside_the_shared_one(client, monkeypatch):
+    from app.core import config
+
+    monkeypatch.setattr(config, 'SERVICE_KEYS', {'reports': 'reports-only-key'})
+    for key in ('reports-only-key', SERVICE_KEY):
+        response = client.get(
+            '/v1/introspect/health', headers={'X-Allset-Service-Key': key}
+        )
+        assert response.status_code == 200, key
+
+
+def test_per_consumer_key_alone_still_authenticates(client, monkeypatch):
+    """An empty shared key must not trip the fail-closed branch while a
+    consumer key is configured."""
+    from app.core import config
+
+    monkeypatch.setattr(config, 'SERVICE_KEY', '')
+    monkeypatch.setattr(config, 'SERVICE_KEYS', {'reports': 'reports-only-key'})
+    ok = client.get('/v1/introspect/health', headers={'X-Allset-Service-Key': 'reports-only-key'})
+    assert ok.status_code == 200
+    wrong = client.get('/v1/introspect/health', headers={'X-Allset-Service-Key': 'reports'})
+    assert wrong.status_code == 401
+
+
+def test_per_consumer_keys_parse_and_reject_malformed_entries(monkeypatch):
+    from app.core import config
+
+    monkeypatch.setenv('ALLSET_SERVICE_KEYS', ' reports:abc , billing:d:e ,')
+    assert config._named_keys('ALLSET_SERVICE_KEYS') == {'reports': 'abc', 'billing': 'd:e'}
+
+    for bad in ('just-a-key', 'reports:', ':abc'):
+        monkeypatch.setenv('ALLSET_SERVICE_KEYS', bad)
+        with pytest.raises(RuntimeError):
+            config._named_keys('ALLSET_SERVICE_KEYS')
+
+
 def test_service_key_comparison_is_not_a_prefix_match(client):
     for candidate in (SERVICE_KEY[:-1], SERVICE_KEY + 'x', SERVICE_KEY.upper()):
         response = client.post(
@@ -218,7 +254,7 @@ def test_introspect_and_me_agree_for_the_same_token(
 ):
     """The contract that keeps a frontend's UI gating from drifting away from a
     backend's authorisation."""
-    token = make_token(roles=['manager', 'presales'])
+    token = make_token(roles=['manager', 'presales'], phone='+91 98765 43210')
 
     introspected = introspect(client, token, service_headers).json()
     me = client.get('/v1/auth/me', headers={'Authorization': f'Bearer {token}'}).json()
@@ -226,3 +262,23 @@ def test_introspect_and_me_agree_for_the_same_token(
     assert introspected['apps'] == me['apps']
     assert introspected['roles'] == me['roles']
     assert introspected['user_id'] == me['user_id']
+    assert introspected['phone'] == me['phone'] == '+91 98765 43210'
+
+
+def test_phone_comes_from_the_token_as_stored(
+    client, service_headers, make_token, jwks_mock
+):
+    """Consultation Agent finds a user's broker profile by this. It is passed
+    through unnormalised; the consumer normalises."""
+    token = make_token(roles=['presales'], phone='+91 98765 43210')
+    assert introspect(client, token, service_headers).json()['phone'] == '+91 98765 43210'
+
+
+def test_token_without_a_phone_claim_reports_an_empty_phone(
+    client, service_headers, make_token, jwks_mock
+):
+    """Tokens minted before the hook stamped phone keep working until they
+    expire; they just carry no phone."""
+    body = introspect(client, make_token(roles=['presales']), service_headers).json()
+    assert body['active'] is True
+    assert body['phone'] == ''

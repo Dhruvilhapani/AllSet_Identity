@@ -1,0 +1,51 @@
+{
+  "service": "broker_tools",
+  "name": "Broker Tools",
+  "description": "Leads, tasks and reports for the sales team",
+  "resources": {
+    "lead": {
+      "label": "Leads",
+      "actions": ["create", "read", "update", "assign", "sync"],
+      "scopes": {
+        "own_presales": "Own leads (pre-sales owner)",
+        "own_sales": "Own leads (sales owner)"
+      }
+    },
+    "lead_note": {"label": "Lead notes", "actions": ["read", "create", "update"],
+                  "scopes": {"via_lead": "On leads they can see"}},
+    "lead_call": {"label": "Lead calls", "actions": ["read"],
+                  "scopes": {"via_lead": "On leads they can see"}},
+    "lead_requirement": {"label": "Lead requirements", "actions": ["read", "update"],
+                         "scopes": {"via_lead": "On leads they can see"}},
+    "lead_recommendation": {"label": "Property recommendations", "actions": ["read"],
+                            "scopes": {"via_lead": "On leads they can see"}},
+    "lead_shared_option": {"label": "Shared property options", "actions": ["read", "create"],
+                           "scopes": {"via_lead": "On leads they can see"}},
+    "lead_consultation": {"label": "Consultations", "actions": ["read", "create", "update"],
+                          "scopes": {"via_lead": "On leads they can see"}},
+    "lead_site_visit": {"label": "Site visits", "actions": ["read", "create", "update"],
+                        "scopes": {"via_lead": "On leads they can see"}},
+    "lead_whatsapp": {"label": "Lead WhatsApp", "actions": ["read", "send"],
+                      "scopes": {"via_lead": "On leads they can see"}},
+    "lead_task": {
+      "label": "Tasks",
+      "actions": ["read", "close", "create"],
+      "scopes": {"assigned": "Assigned to them", "via_lead": "On leads they can see"}
+    },
+    "report": {
+      "label": "Reports",
+      "actions": ["read"],
+      "scopes": {"own": "Their own numbers", "own_team_aggregate": "Their desk team, without names"}
+    },
+    "daily_remark": {"label": "Daily remarks", "actions": ["read", "update"],
+                     "scopes": {"own": "Their own"}},
+    "distribution_settings": {"label": "Lead distribution settings", "actions": ["read", "update"]},
+    "reference": {"label": "Team, stages, statuses and sources", "actions": ["read"]},
+    "property": {"label": "Properties", "actions": ["read"]},
+    "brochure": {"label": "Brochures", "actions": ["create", "publish"]},
+    "ai_chat": {"label": "AI chat", "actions": ["use"]}
+  },
+  "attributes": {
+    "desk": {"label": "Desk", "kind": "enum", "options": ["presales", "sales"]}
+  }
+}

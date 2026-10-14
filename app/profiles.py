@@ -13,7 +13,6 @@ import logging
 
 import httpx
 
-from app.capabilities import validate_roles
 from app.core import config
 
 logger = logging.getLogger(__name__)
@@ -103,18 +102,20 @@ def upsert(
     *,
     user_id: str,
     email: str,
-    roles: list[str],
     full_name: str = '',
     phone: str = '',
     is_active: bool = True,
     legacy_migrated_at: str | None = None,
 ) -> dict:
-    """Create or replace a profile. Roles are validated here as well as by the
-    DB CHECK constraints."""
+    """Create or replace a profile, without its roles.
+
+    Roles are set only through policy_db.set_user_roles, which writes
+    identity_user_roles, keeps the user_profiles.roles mirror in step and audits
+    the change in one transaction. A new row starts with no roles.
+    """
     payload = {
         'user_id': user_id,
         'email': email,
-        'roles': validate_roles(roles),
         'full_name': full_name,
         'phone': phone,
         'is_active': is_active,
@@ -135,7 +136,8 @@ def upsert(
 
 def update(user_id: str, changes: dict) -> dict:
     if 'roles' in changes:
-        changes = {**changes, 'roles': validate_roles(changes['roles'])}
+        # Writing the mirror directly would desync it from identity_user_roles.
+        raise ValueError('set roles with policy_db.set_user_roles, not profiles.update')
 
     with _client() as client:
         response = client.patch(

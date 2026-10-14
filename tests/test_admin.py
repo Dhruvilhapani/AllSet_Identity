@@ -7,6 +7,8 @@ change roles" and not.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import respx
 from httpx import Response
@@ -19,6 +21,8 @@ PROFILES_URL = f'{SUPABASE_URL}/rest/v1/user_profiles'
 # GoTrue has no admin logout endpoint, so revocation goes through this RPC.
 # See db/003_revoke_sessions.sql.
 REVOKE_URL = f'{SUPABASE_URL}/rest/v1/rpc/identity_revoke_user_sessions'
+# Roles are written only through this function (db/004_permissions.sql).
+SET_ROLES_URL = f'{SUPABASE_URL}/rest/v1/rpc/identity_set_user_roles'
 
 USER_ID = '11111111-2222-3333-4444-555555555555'
 OTHER_ID = '99999999-8888-7777-6666-555555555555'
@@ -39,6 +43,23 @@ def profile_row(user_id=OTHER_ID, roles=('viewer',), is_active=True, email='othe
 
 def auth_header(token):
     return {'Authorization': f'Bearer {token}'}
+
+
+def mock_set_roles(snapshot, status_code=200, body=None):
+    """identity_set_user_roles. On success it records the roles in the
+    roster, as the reload after a real write would."""
+    def handler(request):
+        if status_code != 200:
+            return Response(status_code, json=body)
+        sent = json.loads(request.content)
+        roles = sorted(set(sent['p_role_keys']))
+        entry = snapshot.users.setdefault(sent['p_user_id'], {
+            'user_id': sent['p_user_id'], 'email': 'other@allset.in', 'full_name': '',
+            'phone': '', 'is_active': True, 'attributes': {},
+        })
+        entry['roles'] = roles
+        return Response(200, json=roles)
+    return respx.post(SET_ROLES_URL).mock(side_effect=handler)
 
 
 # ── The guard ────────────────────────────────────────────────────────────────
@@ -105,12 +126,10 @@ def test_presales_and_sales_together_are_rejected(client, make_token, jwks_mock)
 
 
 @respx.mock
-def test_empty_role_set_is_allowed(client, make_token, jwks_mock):
+def test_empty_role_set_is_allowed(client, make_token, jwks_mock, policy_snapshot):
     """Offboarding: keep the account, remove all access."""
     respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
-    respx.patch(PROFILES_URL).mock(
-        return_value=Response(200, json=[profile_row(roles=[])])
-    )
+    mock_set_roles(policy_snapshot)
     respx.post(REVOKE_URL).mock(return_value=Response(204))
 
     token = make_token(roles=['admin'])
@@ -125,13 +144,11 @@ def test_empty_role_set_is_allowed(client, make_token, jwks_mock):
 # ── Role changes force a re-login ────────────────────────────────────────────
 
 @respx.mock
-def test_role_change_signs_the_user_out_everywhere(client, make_token, jwks_mock):
+def test_role_change_signs_the_user_out_everywhere(client, make_token, jwks_mock, policy_snapshot):
     """Roles ride in the JWT and consumers cache for 60s, so without a global
     sign-out a removed role would keep working until the access token expired."""
     respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
-    respx.patch(PROFILES_URL).mock(
-        return_value=Response(200, json=[profile_row(roles=['editor'])])
-    )
+    mock_set_roles(policy_snapshot)
     logout = respx.post(REVOKE_URL).mock(
         return_value=Response(204)
     )
@@ -184,14 +201,12 @@ def test_admin_cannot_remove_their_own_admin_role(client, make_token, jwks_mock)
 
 
 @respx.mock
-def test_admin_can_change_their_own_non_admin_roles(client, make_token, jwks_mock):
+def test_admin_can_change_their_own_non_admin_roles(client, make_token, jwks_mock, policy_snapshot):
     """Adding a desk role to yourself is fine as long as admin/tech survives."""
     respx.get(PROFILES_URL).mock(
         return_value=Response(200, json=[profile_row(user_id=USER_ID, roles=['admin'])])
     )
-    respx.patch(PROFILES_URL).mock(
-        return_value=Response(200, json=[profile_row(user_id=USER_ID, roles=['admin', 'sales'])])
-    )
+    mock_set_roles(policy_snapshot)
     respx.post(REVOKE_URL).mock(return_value=Response(204))
 
     token = make_token(roles=['admin'], user_id=USER_ID)
@@ -215,15 +230,13 @@ def test_admin_cannot_deactivate_themselves(client, make_token, jwks_mock):
 
 
 @respx.mock
-def test_tech_can_demote_an_admin(client, make_token, jwks_mock):
+def test_tech_can_demote_an_admin(client, make_token, jwks_mock, policy_snapshot):
     """The two global roles can administer each other — that is the point of
     having both."""
     respx.get(PROFILES_URL).mock(
         return_value=Response(200, json=[profile_row(user_id=OTHER_ID, roles=['admin'])])
     )
-    respx.patch(PROFILES_URL).mock(
-        return_value=Response(200, json=[profile_row(user_id=OTHER_ID, roles=['manager'])])
-    )
+    mock_set_roles(policy_snapshot)
     respx.post(REVOKE_URL).mock(return_value=Response(204))
 
     token = make_token(roles=['tech'], user_id=USER_ID)
@@ -237,12 +250,15 @@ def test_tech_can_demote_an_admin(client, make_token, jwks_mock):
 
 # ── Provisioning ─────────────────────────────────────────────────────────────
 
+NEW_PASSWORD = 'chosen-by-admin-1'
+
+
 @respx.mock
-def test_creating_a_user_sends_a_set_password_email_and_sets_no_password(
-    client, make_token, jwks_mock
+def test_creating_a_user_sets_the_admins_password_and_sends_no_email(
+    client, make_token, jwks_mock, policy_snapshot
 ):
-    """Replaces the CMS invite flow, which generated a random password and then
-    never emailed or returned it — leaving invited users unable to log in."""
+    """The admin chooses the password and hands it over (decided 2026-10-13);
+    nothing is emailed."""
     respx.get(PROFILES_URL).mock(return_value=Response(200, json=[]))
     respx.get(ADMIN_USERS_URL).mock(return_value=Response(200, json={'users': []}))
     create = respx.post(ADMIN_USERS_URL).mock(
@@ -251,24 +267,71 @@ def test_creating_a_user_sends_a_set_password_email_and_sets_no_password(
     respx.post(PROFILES_URL).mock(
         return_value=Response(201, json=[profile_row(roles=['presales'])])
     )
+    set_roles = mock_set_roles(policy_snapshot)
     recover = respx.post(RECOVER_URL).mock(return_value=Response(200, json={}))
 
     token = make_token(roles=['admin'])
     response = client.post(
         '/v1/admin/users',
-        json={'email': 'New.Person@allset.in', 'full_name': 'New Person',
-              'roles': ['presales']},
+        json={'email': 'New.Person@allset.in', 'password': NEW_PASSWORD,
+              'full_name': 'New Person', 'roles': ['presales']},
         headers=auth_header(token),
     )
     assert response.status_code == 201
-    assert recover.called
+    assert not recover.called
+    assert json.loads(set_roles.calls.last.request.content)['p_role_keys'] == ['presales']
+    assert response.json()['roles'] == ['presales']
+    assert NEW_PASSWORD not in response.text
 
-    body = create.calls.last.request.read().decode()
-    # No password chosen by the admin, and the account is usable immediately
-    # because email confirmation is disabled for this project.
-    assert '"password"' not in body
-    assert '"email_confirm": true' in body.replace('":', '": ').replace('  ', ' ') or \
-           'email_confirm' in body
+    body = json.loads(create.calls.last.request.content)
+    # Usable at once: email confirmation is disabled for this project.
+    assert body['password'] == NEW_PASSWORD
+    assert body['email_confirm'] is True
+    assert body['email'] == 'new.person@allset.in'
+
+
+@respx.mock
+def test_creating_a_user_who_has_a_supabase_account_sets_their_password(
+    client, make_token, jwks_mock, policy_snapshot
+):
+    """An auth account with no profile here (left by an older invite flow) is
+    reused, and the admin's password replaces whatever it had, with its
+    sessions revoked, so the password handed over is the one that works."""
+    respx.get(PROFILES_URL).mock(return_value=Response(200, json=[]))
+    respx.get(ADMIN_USERS_URL).mock(
+        return_value=Response(200, json={'users': [{'id': OTHER_ID, 'email': 'old@allset.in'}]})
+    )
+    create = respx.post(ADMIN_USERS_URL).mock(return_value=Response(200, json={'id': 'never'}))
+    put = respx.put(f'{ADMIN_USERS_URL}/{OTHER_ID}').mock(
+        return_value=Response(200, json={'id': OTHER_ID})
+    )
+    revoke = respx.post(REVOKE_URL).mock(return_value=Response(200, text='1'))
+    respx.post(PROFILES_URL).mock(return_value=Response(201, json=[profile_row()]))
+    mock_set_roles(policy_snapshot)
+
+    response = client.post(
+        '/v1/admin/users',
+        json={'email': 'old@allset.in', 'password': NEW_PASSWORD, 'roles': ['viewer']},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+    assert response.status_code == 201
+    assert not create.called
+    assert json.loads(put.calls.last.request.content)['password'] == NEW_PASSWORD
+    assert revoke.called
+
+
+@pytest.mark.parametrize('password', [None, '', 'short'])
+@respx.mock
+def test_creating_a_user_needs_a_password_of_10_or_more(client, make_token, jwks_mock, password):
+    create = respx.post(ADMIN_USERS_URL).mock(return_value=Response(200, json={'id': OTHER_ID}))
+    body = {'email': 'new@allset.in', 'roles': ['viewer']}
+    if password is not None:
+        body['password'] = password
+
+    response = client.post('/v1/admin/users', json=body,
+                           headers=auth_header(make_token(roles=['admin'])))
+    assert response.status_code == 422
+    assert not create.called
 
 
 @respx.mock
@@ -277,7 +340,7 @@ def test_creating_a_duplicate_user_is_a_409(client, make_token, jwks_mock):
     token = make_token(roles=['admin'])
     response = client.post(
         '/v1/admin/users',
-        json={'email': 'other@allset.in', 'roles': ['viewer']},
+        json={'email': 'other@allset.in', 'password': NEW_PASSWORD, 'roles': ['viewer']},
         headers=auth_header(token),
     )
     assert response.status_code == 409
@@ -293,11 +356,82 @@ def test_creating_a_user_with_a_bad_role_creates_nothing(client, make_token, jwk
     token = make_token(roles=['admin'])
     response = client.post(
         '/v1/admin/users',
-        json={'email': 'new@allset.in', 'roles': ['presales', 'sales']},
+        json={'email': 'new@allset.in', 'password': NEW_PASSWORD, 'roles': ['presales', 'sales']},
         headers=auth_header(token),
     )
     assert response.status_code == 400
     assert not create.called
+
+
+@respx.mock
+def test_admin_can_set_a_users_phone_and_name(client, make_token, jwks_mock):
+    respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
+    updated = {**profile_row(), 'phone': '9876543210', 'full_name': 'New Name'}
+    patch = respx.patch(PROFILES_URL).mock(return_value=Response(200, json=[updated]))
+
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}',
+        json={'phone': ' 9876543210 ', 'full_name': 'New Name'},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+
+    assert response.status_code == 200
+    assert response.json()['phone'] == '9876543210'
+    sent = patch.calls.last.request
+    assert f'user_id=eq.{OTHER_ID}' in str(sent.url)
+    # Trimmed before it is stored, and roles are not part of this endpoint.
+    assert json.loads(sent.content) == {'phone': '9876543210', 'full_name': 'New Name'}
+
+
+@respx.mock
+def test_profile_update_does_not_revoke_sessions(client, make_token, jwks_mock):
+    """Revoking would not shorten how long the old phone lives in an issued
+    access token, so it is not done."""
+    respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
+    respx.patch(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
+    revoke = respx.post(REVOKE_URL).mock(return_value=Response(204))
+
+    client.patch(
+        f'/v1/admin/users/{OTHER_ID}',
+        json={'phone': '9876543210'},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+    assert not revoke.called
+
+
+def test_profile_update_with_nothing_to_change_is_a_400(client, make_token, jwks_mock):
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}', json={},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+    assert response.status_code == 400
+
+
+def test_profile_update_rejects_an_overlong_phone(client, make_token, jwks_mock):
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}', json={'phone': '9' * 33},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+    assert response.status_code == 422
+
+
+@respx.mock
+def test_profile_update_on_a_missing_user_is_404(client, make_token, jwks_mock):
+    respx.get(PROFILES_URL).mock(return_value=Response(200, json=[]))
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}', json={'phone': '9876543210'},
+        headers=auth_header(make_token(roles=['admin'])),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize('roles', [['viewer'], ['lead_manager'], ['presales'], []])
+def test_non_admins_cannot_change_a_profile(client, make_token, jwks_mock, roles):
+    response = client.patch(
+        f'/v1/admin/users/{OTHER_ID}', json={'phone': '9876543210'},
+        headers=auth_header(make_token(roles=roles)),
+    )
+    assert response.status_code == 403
 
 
 @respx.mock
@@ -313,13 +447,12 @@ def test_role_update_on_a_missing_user_is_404(client, make_token, jwks_mock):
 
 
 @respx.mock
-def test_a_db_check_violation_is_reported_as_a_client_error(client, make_token, jwks_mock):
-    """If validate_roles is ever bypassed, the DB constraint still catches it —
-    and that must read as a 400, not a 500."""
+def test_a_database_refusal_is_reported_as_a_client_error(client, make_token, jwks_mock, policy_snapshot):
+    """If the API's own validation is ever bypassed, identity_set_user_roles
+    still refuses — and that must read as a 400 with its message, not a 500."""
     respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
-    respx.patch(PROFILES_URL).mock(
-        return_value=Response(400, json={'code': '23514', 'message': 'roles_one_desk'})
-    )
+    mock_set_roles(policy_snapshot, status_code=400,
+                   body={'code': '22023', 'message': 'unknown role: retired_role'})
     token = make_token(roles=['admin'])
     response = client.patch(
         f'/v1/admin/users/{OTHER_ID}/roles',
@@ -327,6 +460,7 @@ def test_a_db_check_violation_is_reported_as_a_client_error(client, make_token, 
         headers=auth_header(token),
     )
     assert response.status_code == 400
+    assert response.json()['detail'] == 'unknown role: retired_role'
 
 
 # ── Revocation must never fail silently ──────────────────────────────────────
@@ -337,14 +471,12 @@ def test_a_db_check_violation_is_reported_as_a_client_error(client, make_token, 
 # succeed while the old role kept working until the token expired.
 
 @respx.mock
-def test_a_missing_revocation_function_is_not_swallowed(client, make_token, jwks_mock):
+def test_a_missing_revocation_function_is_not_swallowed(client, make_token, jwks_mock, policy_snapshot):
     """PostgREST answers 404 on an RPC path when the function does not exist,
     i.e. db/003_revoke_sessions.sql was never applied. That must surface, not
     be mistaken for "no sessions to revoke"."""
     respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
-    respx.patch(PROFILES_URL).mock(
-        return_value=Response(200, json=[profile_row(roles=['editor'])])
-    )
+    mock_set_roles(policy_snapshot)
     respx.post(REVOKE_URL).mock(return_value=Response(404, json={'message': 'Not Found'}))
 
     token = make_token(roles=['admin'])
@@ -376,13 +508,11 @@ def test_a_failed_revocation_is_not_swallowed(client, make_token, jwks_mock):
 
 
 @respx.mock
-def test_revocation_targets_the_right_user(client, make_token, jwks_mock):
+def test_revocation_targets_the_right_user(client, make_token, jwks_mock, policy_snapshot):
     """The RPC takes the user id in the body; sending the wrong one would sign
     out somebody else and leave the intended user's sessions live."""
     respx.get(PROFILES_URL).mock(return_value=Response(200, json=[profile_row()]))
-    respx.patch(PROFILES_URL).mock(
-        return_value=Response(200, json=[profile_row(roles=['viewer'])])
-    )
+    mock_set_roles(policy_snapshot)
     revoke = respx.post(REVOKE_URL).mock(return_value=Response(200, text='3'))
 
     token = make_token(roles=['admin'])

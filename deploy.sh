@@ -228,6 +228,7 @@ secret_exists() {
 SECRET_PAIRS="SUPABASE_ANON_KEY=identity-supabase-anon-key"
 SECRET_PAIRS+=" SUPABASE_SERVICE_ROLE_KEY=identity-supabase-service-role-key"
 SECRET_PAIRS+=" ALLSET_SERVICE_KEY=identity-allset-service-key"
+SECRET_PAIRS+=" ALLSET_SERVICE_KEYS=identity-allset-service-keys"
 SECRET_PAIRS+=" SUPABASE_JWT_SECRET=identity-supabase-jwt-secret"
 SECRET_PAIRS+=" LEGACY_CMS_DB_PASSWORD=identity-legacy-cms-db-password"
 
@@ -241,6 +242,11 @@ if [[ "$LEGACY_ENABLED" == "true" ]]; then
 fi
 if [[ -n "$(read_env_var SUPABASE_JWT_SECRET)" ]]; then
   REQUIRED_SECRET_VARS+=" SUPABASE_JWT_SECRET"
+fi
+# Same for ALLSET_SERVICE_KEYS: a consumer listed in the env file must not lose
+# its key because the secret was never synced.
+if [[ -n "$(read_env_var ALLSET_SERVICE_KEYS)" ]]; then
+  REQUIRED_SECRET_VARS+=" ALLSET_SERVICE_KEYS"
 fi
 
 is_required_secret() {
@@ -363,12 +369,14 @@ if [[ -z "$SERVICE_URL" || -z "$CREATED_REVISION" || "$READY_REVISION" != "$CREA
 fi
 echo "==> Revision ready: $READY_REVISION"
 
-# /health is liveness; /v1/auth/roles and /identity/v1/auth/roles are public,
-# no-I/O routes that prove both router mounts are live. The /identity/v1 mount
-# is what Firebase Hosting's /identity/** rewrite hits (it doesn't strip the
-# prefix) — losing it breaks every browser login.
+# /health is liveness; /v1/auth/roles and /identity/v1/auth/roles are public
+# routes that prove both router mounts are live. They answer from the policy
+# snapshot, so they also fail if db/004 and db/005 haven't been applied. The
+# /identity/v1 mount is what Firebase Hosting's /identity/** rewrite hits (it
+# doesn't strip the prefix) — losing it breaks every browser login. /admin/ is
+# the console the image builds; a 404 there means the Node stage didn't ship it.
 VERIFY_FAILED=false
-for path in /health /v1/auth/roles /identity/v1/auth/roles; do
+for path in /health /v1/auth/roles /identity/v1/auth/roles /admin/; do
   code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "${SERVICE_URL}${path}" 2>/dev/null)" || code="${code:-000}"
   if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then
     echo "==> GET $path -> $code"

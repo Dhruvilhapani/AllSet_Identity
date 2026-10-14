@@ -10,3 +10,7 @@ venv/
 secrets/
 *.sqlite3
 deploy/env*.yaml
+
+# Admin console build
+admin/node_modules/
+admin/dist/

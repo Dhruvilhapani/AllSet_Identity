@@ -9,25 +9,26 @@ either one. This talks to the identity service directly.
     python scripts/manage_users.py create khush@allset.in "Khush Anada" lead_manager viewer
     python scripts/manage_users.py roles darshil@allset.in sales viewer
     python scripts/manage_users.py status bhavin@allset.in off
+    python scripts/manage_users.py phone jinal@allset.in 9876543210
     python scripts/manage_users.py roles someone@allset.in          # no roles = no access
 
-Authenticates as you. The password is prompted for when interactive and read
-from stdin when piped, so it is never passed as an argument — an argument would
-land in your shell history. Set ALLSET_ADMIN_EMAIL to avoid retyping your
+Authenticates as you. Passwords are prompted for when interactive and read
+from stdin when piped, so they are never passed as arguments — an argument
+would land in your shell history. Set ALLSET_ADMIN_EMAIL to avoid retyping your
 address.
 
-To add several people at once, read the password once and pipe it per call:
+`create` also asks for the new person's password (at least 10 characters).
+Nothing is emailed: hand it over privately; they can change it after signing
+in. Piped, stdin holds your password, then theirs:
 
-    read -rs PASS
+    read -rs PASS                                   # yours
     while IFS='|' read -r mail name role; do
-      echo "$PASS" | python scripts/manage_users.py create "$mail" "$name" "$role"
+      read -rs -p "password for $mail: " NEW </dev/tty; echo
+      printf '%s\n%s\n' "$PASS" "$NEW" | python scripts/manage_users.py create "$mail" "$name" "$role"
     done <<'ROSTER'
     jinal@allset.in|Jinal Jadeja|presales
     darshil@allset.in|Darshil Rathod|sales
     ROSTER
-
-New users are emailed a set-password link and choose their own; this never sets
-a password on someone's behalf.
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ def die(message: str) -> None:
     sys.exit(1)
 
 
-def read_password(email: str) -> str:
+def read_password(prompt: str) -> str:
     """Prompt when interactive, read stdin when piped.
 
     getpass reads the console directly rather than stdin — on Windows via
@@ -57,7 +58,7 @@ def read_password(email: str) -> str:
     would land in shell history.
     """
     if sys.stdin.isatty():
-        return getpass.getpass(f'password for {email}: ')
+        return getpass.getpass(prompt)
 
     password = sys.stdin.readline().rstrip('\n')
     if not password:
@@ -65,9 +66,19 @@ def read_password(email: str) -> str:
     return password
 
 
+def read_new_password(email: str) -> str:
+    """The new person's password: typed twice at a prompt, or the next stdin line."""
+    password = read_password(f'new password for {email}: ')
+    if sys.stdin.isatty() and getpass.getpass('again: ') != password:
+        die('the two passwords differ')
+    if len(password) < 10:
+        die('the password needs at least 10 characters')
+    return password
+
+
 def login() -> str:
     email = os.environ.get('ALLSET_ADMIN_EMAIL') or input('admin email: ').strip()
-    password = read_password(email)
+    password = read_password(f'password for {email}: ')
 
     try:
         r = httpx.post(f'{IDENTITY}/v1/auth/login', timeout=TIMEOUT,
@@ -121,7 +132,8 @@ def show(users: list[dict]) -> None:
         bt = 'broker_tools' if u['apps']['broker_tools']['access'] else '------------'
         state = '' if u['is_active'] else '  [INACTIVE]'
         roles = ', '.join(u['roles']) or 'no roles'
-        print(f'  {u["email"]:<{width}}  {cms:3} {bt:12}  {roles}{state}')
+        phone = u.get('phone') or 'no phone'
+        print(f'  {u["email"]:<{width}}  {cms:3} {bt:12}  {phone:<14}  {roles}{state}')
 
 
 def main() -> None:
@@ -140,10 +152,11 @@ def main() -> None:
         if len(args) < 2:
             die('usage: create <email> "<full name>" [role ...]')
         email, full_name, roles = args[0], args[1], args[2:]
+        password = read_new_password(email)
         created = api(token, 'POST', '/v1/admin/users',
-                      {'email': email, 'full_name': full_name, 'roles': roles})
+                      {'email': email, 'password': password, 'full_name': full_name, 'roles': roles})
         print(f'created {created["email"]} with {created["roles"] or "no roles"}')
-        print('a set-password email has been sent; they choose their own password')
+        print('no email was sent: hand them the password privately')
 
     elif action == 'roles':
         if not args:
@@ -164,8 +177,17 @@ def main() -> None:
             {'is_active': active})
         print(f'{email} is now {"active" if active else "INACTIVE"}')
 
+    elif action == 'phone':
+        if len(args) != 2:
+            die('usage: phone <email> <phone>')
+        email, phone = args
+        user = find(token, email)
+        updated = api(token, 'PATCH', f'/v1/admin/users/{user["user_id"]}', {'phone': phone})
+        print(f'{email}: phone {user["phone"] or "(none)"} -> {updated["phone"]}')
+        print('it reaches their token when they next sign in or refresh')
+
     else:
-        die(f'unknown action {action!r} - try list, create, roles or status')
+        die(f'unknown action {action!r} - try list, create, roles, status or phone')
 
 
 if __name__ == '__main__':

@@ -1,8 +1,9 @@
 # AllSet Identity
 
-Unified authentication and role-based access control for **AllSet_CMS** and
-**AllSet_Broker_Tools**. One identity per person, one password, one role set
-spanning both apps, and one place to grant or revoke access.
+Unified authentication and permissions for every AllSet service: the CMS,
+Broker Tools, WhatsApp Automation and Consultation Agent. One identity per
+person, one password, one role set, and one place — the admin console at
+`/admin` — to decide who may do what in each service.
 
 Before this service, each app ran its own Django SimpleJWT auth with its own
 role vocabulary (`admin/editor/agent/viewer` vs `admin/manager/presales/sales`),
@@ -11,17 +12,27 @@ table lived on an ephemeral SQLite file that was re-seeded from hardcoded
 passwords on every container start, so password changes never persisted and the
 seeded defaults were effectively permanent.
 
-## Roles
+The permission model, the admin console and every decision behind them are in
+[`docs/ARCHITECTURE_ADMIN.md`](docs/ARCHITECTURE_ADMIN.md). Services integrate
+with [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
 
-A user holds a **set** of roles, and capabilities are the **union** across them.
-Every role is single-app except `admin` and `tech`, which are deliberately
-permission-identical global roles — the distinction is organisational and shows
-up in audit trails.
+## Roles and permissions
+
+A user holds a **set** of roles, and their permissions are the **union** of
+what those roles are granted. A grant says: this role may perform this action on
+this resource of this service, limited to this scope (which rows). Each service
+declares its resources, actions and scopes in a manifest; admins create roles,
+grant them in a per-service matrix, and assign them, all in the console. None of
+it is code any more: it lives in the `identity_*` tables (`db/004_permissions.sql`).
+
+The roles seeded on day one, and what they grant, reproduce exactly what the
+services enforced before (`db/005_seed_permissions.sql`, generated from
+`app/permissions/seed/`):
 
 | Role | Label | CMS | Broker Tools |
 |---|---|---|---|
-| `admin` | Admin | Full, incl. delete + user management | All leads |
-| `tech` | Tech | Full — identical to admin | All leads |
+| `admin` | Admin | Everything (superuser: every action in every service) | Everything |
+| `tech` | Tech | Full, incl. delete | All leads; not lead-distribution settings |
 | `manager` | Manager | Add/edit/publish/upload/SEO | — |
 | `editor` | Editor | Same as manager | — |
 | `viewer` | Viewer | Read-only | — |
@@ -30,94 +41,83 @@ up in audit trails.
 | `sales` | Sales | — | Own leads (`fk_sales_owner`) |
 
 So `{sales, viewer}` means own-leads in Broker Tools plus read-only CMS, and
-`{manager, sales}` means CMS editor-level plus own-leads — not all leads, which
-is why `manager` and `lead_manager` are separate roles.
+`{manager, sales}` means CMS editor-level plus own-leads. WA Automation and
+Consultation Agent are granted to the Broker Tools roles; the console shows the
+full matrix for each service.
 
-Two rules are enforced both here and as Postgres CHECK constraints, because the
-role set is the one piece of state that must never be wrong:
+Rules the database enforces, because the role set must never be wrong:
 
-- every role must be in the vocabulary above
-- **at most one of `presales`/`sales`** — `team_members.role` over in `call_logs`
-  is single-valued and drives `call_sync.py`'s lead-owner auto-assignment
+- a role must exist to be assigned (foreign key)
+- **at most one role per exclusive group**: `presales` and `sales` share the
+  group `desk`
+- the last active `admin` cannot lose the role or be deactivated
 
 An **empty** role set is legal and means "the account exists but reaches
 nothing" — the clean offboarding state, distinct from `is_active = false`, which
 blocks login outright.
 
-[`app/capabilities.py`](app/capabilities.py) is the single source of truth for
-all of the above. Nothing else should encode role rules.
+Broker Tools' **desk** (presales or sales) is a per-service user attribute set
+in the console, separate from the role, because Broker Tools' auto-assignment,
+distribution pool and team reports select people by it.
 
 ## How it fits together
 
 ```
-  admin_ui (CMS)          web (Broker Tools)
+  admin console (/admin) · CMS admin_ui · Broker Tools web · WA console
         │                        │
         └──── POST /v1/auth/login ────┐
                                       ▼
                             ┌──────────────────┐
-                            │ AllSet Identity  │──── Supabase Auth
+                            │ AllSet Identity  │──── Supabase Auth + identity_* tables
                             │    (this repo)   │     (call_logs project)
                             └──────────────────┘
                                       ▲
         ┌────── POST /v1/introspect ───┘
         │
-  CMS backend · Broker Tools API · Broker Tools FastAPI · ai_service
+  CMS backend · ai_service · Broker Tools API + FastAPI · WA Automation · Consultation Agent
 ```
 
-`/v1/introspect` sits on the hot path — every authenticated request in both apps
-goes through it — so it is built to do **no I/O at all**:
+`/v1/introspect` sits on the hot path — every authenticated request in every
+service goes through it — so it does **no I/O per request**:
 
-1. A Supabase **Custom Access Token Hook** (`db/002_access_token_hook.sql`)
-   stamps the user's roles into every JWT it issues.
-2. This service verifies the signature against an **in-memory JWKS cache**,
-   refetched only when a `kid` is unrecognised.
-3. Roles are read from the token's claim. No database query, no Supabase call.
+1. This service verifies the token's signature against an **in-memory JWKS
+   cache**, refetched only when a `kid` is unrecognised.
+2. It looks the user up in the **policy snapshot**: every service, resource,
+   role and grant, plus the roster (each user's roles, status, name, phone and
+   attributes), held in memory and refreshed in the background every 30 s
+   (`app/permissions/cache.py`). An instance that cannot load a snapshot at all
+   answers 503, which consumers fail closed on.
+3. It resolves the user's roles into `permissions` per service, memoised per
+   role set, and keeps emitting the old capability flags beside them until every
+   consumer has migrated.
 4. Consumers cache the response for 60s keyed on a hash of the token.
 
-Broker Tools' FastAPI service actually gets *faster*: it currently forwards every
-request to Django's `/api/auth/verify/`, and that hop is replaced, not added to.
+A Supabase **Custom Access Token Hook** (`db/002_access_token_hook.sql`) still
+stamps roles, status, name and phone into every token. Those claims are used
+only for a user created after the last snapshot refresh.
 
-**Revocation.** Because roles ride in the JWT and are cached for 60s, a role
-change takes up to 60s plus the remaining access-token lifetime to bite. Every
-role change, deactivation and admin password reset revokes the user's sessions,
-which kills their refresh tokens immediately — but it cannot recall an access
-token already sitting in a browser.
+**Revocation.** Because roles and status come from the roster rather than the
+token, removing a role or deactivating someone reaches every consumer in about
+90 s (the 30 s refresh plus their 60 s cache), even though access tokens live for
+**7 days**. Every role change, deactivation and admin password reset also revokes
+the user's sessions, which kills their refresh tokens at once.
 
 That revocation goes through the `identity_revoke_user_sessions` RPC, not a
 GoTrue endpoint. GoTrue has no admin logout: `POST /admin/users/{id}/logout`
 does not exist, and `POST /logout?scope=global` needs the user's own access
 token. Both verified against a live project. If `db/003_revoke_sessions.sql`
 has not been applied, role changes fail loudly rather than reporting success
-while the old role keeps working.
+while the old sessions stay alive.
 
-That last point — an issued access token cannot be recalled — now matters a great
-deal more than it used to. The access-token lifetime was raised from 30 minutes
-to **7 days** so people stop being signed out several times a day, and the
-consequence is that **a removed role or a deactivated account can keep working
-for up to 7 days**.
-
-Be precise about why, because it is easy to assume otherwise: both `roles` and
-`is_active` are read from the token's claims, since `/v1/introspect` does no I/O
-by design. So nothing in this service can recall an access token that has already
-been issued — not a role change, not deactivation, and not a password reset.
-Those all revoke *sessions*, which stops the holder getting a **new** token; the
-one already in their browser keeps working until it expires.
-
-**Offboarding is therefore not immediate.** Clear their roles and deactivate them
-as usual, and understand that it takes effect when their current access token
-expires. The only way to invalidate live tokens sooner is to rotate the Supabase
-project's JWT signing key, which signs every user out at once.
-
-7 days is Supabase's ceiling for this setting, not a chosen number — 604800
-seconds is the maximum the dashboard accepts. The alternative that avoids the
-tradeoff entirely is a short access token plus a refresh loop in the clients;
-the CMS admin panel already has one (`src/api/client.ts` retries on 401), Broker
-Tools' web app does not. If the revocation window ever becomes a problem, wiring
-refresh into Broker Tools and dropping this back to an hour is the fix.
+What still cannot be recalled is the token itself: after a password reset, a
+token already in someone's browser keeps passing introspect until it expires —
+with whatever roles the roster gives its user now. Deactivate the account if
+that matters. 7 days is Supabase's ceiling for the access-token lifetime
+(604800 seconds), set so people are not signed out several times a day.
 
 ## Endpoints
 
-**Browser-facing** — called by both admin UIs:
+**Browser-facing** — called by the admin console and every app's frontend:
 
 | Method | Path | Notes |
 |---|---|---|
@@ -128,24 +128,42 @@ refresh into Broker Tools and dropping this back to an hour is the fix.
 | POST | `/v1/auth/password/change` | Self-service, signed in. Re-verifies the current password first, then revokes the user's other sessions. |
 | POST | `/v1/auth/password/change-with-credentials` | Self-service, **not** signed in — email + current password + new. Behind login's per-email throttle, and answers with login's generic message. |
 | POST | `/v1/auth/password/reset-request` | Always reports success, so it cannot enumerate the roster. Nothing handles the emailed link yet — see below. |
-| GET | `/v1/auth/roles` | The role vocabulary, for populating role pickers. |
+| GET | `/v1/auth/roles` | The roles admins have defined, with labels and exclusive groups, for role pickers. |
 
 **Service-facing** — requires `X-Allset-Service-Key`:
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/v1/introspect` | Always HTTP 200. An invalid token is `{"active": false}`, never an error status — see below. |
-| GET | `/v1/introspect/health` | Lets a consumer check its service key without a user token. |
+| POST | `/v1/introspect` | Always HTTP 200 for any token. An invalid one is `{"active": false}`, never an error status — see below. 503 when no policy snapshot can be loaded. |
+| GET | `/v1/introspect/health` | Checks a service key without a user token; says which service the key belongs to and whether the policy is loaded. |
+| PUT | `/v1/services/manifest` | A service pushes its catalogue on deploy, with its own key (the shared key is refused). |
 
-**Admin** — requires `admin` or `tech`:
+Keys are accepted from `ALLSET_SERVICE_KEY` (shared, identifies no service),
+`ALLSET_SERVICE_KEYS` (named) and keys generated in the console (stored hashed).
+
+**Admin** — requires the `identity.console.use` permission (`admin` and `tech`
+in the seed). The console at `/admin` is the main client:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET, POST | `/v1/admin/users` | |
-| PATCH | `/v1/admin/users/{id}/roles` | Revokes the target's sessions. |
-| PATCH | `/v1/admin/users/{id}/status` | Revokes the target's sessions on deactivation. |
+| GET, POST | `/v1/admin/users` | List (filters `role`, `service`, `active`); create with the password the admin chose. Nothing is emailed. |
+| GET, PATCH | `/v1/admin/users/{id}` | Detail with effective access per service; edit name and phone. |
+| PATCH | `/v1/admin/users/{id}/roles` | Replace roles. Revokes the target's sessions. You cannot remove your own console access. |
+| PUT | `/v1/admin/users/{id}/attributes/{service}` | Per-service attributes, such as Broker Tools' desk. |
+| PATCH | `/v1/admin/users/{id}/status` | Revokes the target's sessions on deactivation. The last active admin cannot be deactivated. |
 | POST | `/v1/admin/users/{id}/reset-password` | Emails a set-password link. |
 | POST | `/v1/admin/users/{id}/set-password` | Sets a password outright, no old password needed. Revokes the target's sessions. |
+| GET, POST | `/v1/admin/roles` | List with member counts; create. |
+| PATCH, DELETE | `/v1/admin/roles/{key}` | Edit (the key never changes); delete is refused while anyone holds the role. |
+| GET, POST | `/v1/admin/services` | List; register a service. |
+| GET, PATCH | `/v1/admin/services/{key}` | Catalogue with retired items, and keys; rename, deactivate. |
+| DELETE | `/v1/admin/services/{key}/resources/{resource}` | Remove a retired resource and its grants. |
+| GET, PUT | `/v1/admin/services/{key}/grants` | The matrix. PUT needs `If-Match` with the version from GET; 409 if someone else saved first. |
+| POST, DELETE | `/v1/admin/services/{key}/keys[/{id}]` | Generate (plaintext shown once) or revoke a service key. |
+| GET | `/v1/admin/audit` | Every change, newest first. |
+
+Every write goes through a SQL function in `db/004_permissions.sql` that records
+an audit row in the same transaction.
 
 ### The introspect status-code contract
 
@@ -166,9 +184,34 @@ uvicorn app.main:app --reload --port 8100
 ```
 
 ```bash
-pytest -q          # 206 tests, no network access needed
+pytest -q          # no network access needed; tests/db is skipped (see below)
 ruff check .
 ```
+
+The admin console lives in `admin/` (React + Vite); see
+[`admin/README.md`](admin/README.md) to run it against this service. To run
+Identity and the console without Supabase credentials, against the real SQL,
+use [`scripts/local_stack/`](scripts/local_stack/README.md).
+
+**The SQL itself** is tested against a real Postgres in `tests/db/`, skipped
+unless you point it at a server it may create a scratch database on:
+
+```bash
+docker run -d --name identity-pgtest -e POSTGRES_PASSWORD=pgtest -p 55432:5432 postgres:15
+pip install -r requirements-legacy.txt            # psycopg2
+IDENTITY_TEST_DATABASE_URL=postgresql://postgres:pgtest@localhost:55432/postgres pytest tests/db
+```
+
+It applies `db/001`-`005` to a fresh database with stand-ins for Supabase's
+roles and auth tables, checks the seeded policy resolves exactly like the seed
+JSON, and exercises every SQL function's guards and audit rows.
+
+**Changing the seed.** `app/permissions/seed/` holds the initial roles, each
+service's manifest and the grants. After editing it, run
+`python scripts/build_seed_sql.py` to regenerate `db/005_seed_permissions.sql`;
+`tests/test_seed_sql.py` fails until you do, and
+`tests/test_permissions_equivalence.py` fails if the grants no longer reproduce
+the legacy capability flags.
 
 Everything in `requirements.txt` ships wheels, so the install needs no compiler
 and no Postgres headers. If `uvicorn` comes back as *not recognized*, the
@@ -202,9 +245,10 @@ rather than stubbed.
    Users**, not in the Table Editor.
 
    Being in Seoul rather than Mumbai costs less than it looks. `/v1/introspect`
-   verifies locally against cached JWKS and reads roles from the token, so the
-   per-request hot path never crosses regions. Only login, refresh and the
-   admin endpoints pay the hop, and the access-token hook runs inside Postgres.
+   verifies locally against cached JWKS and reads everything else from the
+   in-memory policy snapshot, so the per-request hot path never crosses
+   regions. Only login, refresh, the snapshot refresh every 30 s and the admin
+   endpoints pay the hop, and the access-token hook runs inside Postgres.
 
 2. **Apply the SQL**, in order:
    ```
@@ -212,10 +256,24 @@ rather than stubbed.
    db/001_schema.sql
    db/002_access_token_hook.sql
    db/003_revoke_sessions.sql
+   db/004_permissions.sql      (the identity_* permission tables and functions)
+   db/005_seed_permissions.sql (initial roles, catalogues and grants)
    ```
-   This adds exactly one table to `public` — `user_profiles`, alongside the 14
-   the leads schema already has — plus `identity_set_updated_at()`,
-   `custom_access_token_hook()` and the `citext` extension.
+   `001`-`003` add `user_profiles`, alongside the 14 tables the leads schema
+   already has, plus `identity_set_updated_at()`, `custom_access_token_hook()`
+   and the `citext` extension. `004` adds the `identity_*` tables, the
+   `identity_user_attribute_values` view Broker Tools reads desks from, and the
+   SQL functions every admin write goes through. `005` seeds them so that, on
+   day one, everyone has exactly the access they had before; it also copies
+   existing role assignments and Broker Tools desks.
+
+   All of these are safe to re-run. `005` never overwrites a catalogue a
+   service has pushed or grants an admin has edited.
+
+   **On an existing project** (dev or prod, which have separate Supabase
+   projects): apply `004`, then `005`, then re-apply `002` (it now stamps the
+   phone), then deploy. Applying them before the deploy is safe: the running
+   version does not read the new tables.
 
    Both function names are deliberately checked against the live database
    rather than assumed. `call_logs` already has a `public.set_updated_at()`
@@ -239,30 +297,37 @@ rather than stubbed.
    changing it — it is what bounds how long a removed role stays usable.
 
 6. **Configure the environment** — see `.env.example`. `ALLSET_SERVICE_KEY` must
-   match the value set on every consuming service.
+   match the value set on every consuming service that still uses the shared
+   key. Give each service its own key from the console instead (Services →
+   Generate key).
 
 7. **Provision the roster.** The nine people in Broker Tools'
-   `db/call_logs/002_reference_data.sql` need accounts. Either use Users &
-   Roles in the CMS admin panel, or `scripts/manage_users.py`, which needs only
-   this service running:
+   `db/call_logs/002_reference_data.sql` need accounts. Use the admin console
+   at `/admin` (sign in as an admin), or `scripts/manage_users.py`, which needs
+   only this service running:
 
    ```bash
    python scripts/manage_users.py list
    python scripts/manage_users.py create jinal@allset.in "Jinal Jadeja" presales
    python scripts/manage_users.py roles khush@allset.in lead_manager viewer
    python scripts/manage_users.py status bhavin@allset.in off
+   python scripts/manage_users.py phone jinal@allset.in 9876543210
    ```
 
-   Each new account is emailed a set-password link and chooses its own
-   password. This retires the hardcoded `Allset@2024` seeds.
+   Set a phone for everyone who uses Consultation Agent: it finds each
+   person's broker profile by the phone in their token. To fill them in bulk
+   from Broker Tools' `team_members`, review and run
+   `scripts/backfill_profile_phone.sql` in the SQL editor.
 
-   **Known gap:** there is still no page for that emailed link to land on.
-   Neither admin UI has a `/reset-password` route and this service has no
-   `/password/reset-confirm`, so the link redirects to the project's Site URL
-   and nothing completes the flow. Supabase's built-in mailer is also
-   rate-limited to a few messages an hour and is not meant for production, so a
-   burst of invites stops being delivered without reporting an error. Treat the
-   invite email as unreliable and set the password yourself.
+   You choose each new account's password (at least 10 characters) and hand
+   it over privately; nothing is emailed. They can change it after signing in.
+   This retires the hardcoded `Allset@2024` seeds.
+
+   The console's **Email a reset link** on a user's page still sends Supabase's
+   recovery email, but there is no page for that link to land on yet (neither
+   admin UI has a `/reset-password` route and this service has no
+   `/password/reset-confirm`), and Supabase's built-in mailer is rate-limited
+   to a few messages an hour. Use **Change password** instead.
 
 ## Passwords
 
@@ -271,7 +336,7 @@ Three paths, for three different situations:
 | Situation | Use |
 |---|---|
 | You know your password and want a new one | Broker Tools, either the **key icon in the sidebar** once signed in, or **Change your password** on the sign-in screen. Both ask for the current password; no email or OTP involved. |
-| Someone has forgotten theirs entirely | `scripts/admin_set_password.py` — runs as you, needs admin or tech, no service-role key. |
+| Someone has forgotten theirs entirely | **Change password** on their page in the admin console, or `scripts/admin_set_password.py` — both run as you, need admin or tech, and need no old password and no service-role key. |
 | Nobody can log in at all | `scripts/set_password.py` — straight to Supabase with the service-role key. The bootstrap path for the first admin, and the one that still works when this service is down. |
 
 **Password UI lives only in Broker Tools.** The CMS admin panel signs in with the
@@ -342,7 +407,9 @@ narrowing it would leave the CMS with no administrator.
 
 ## Deployment
 
-Cloud Run `asia-south1`, same shape as Broker Tools' FastAPI service:
+Cloud Run `asia-south1`, same shape as Broker Tools' FastAPI service. The image
+builds the admin console in a Node stage and serves it at `/admin` (and
+`/identity/admin` through the Firebase rewrite):
 
 ```bash
 gcloud run deploy allset-identity \
@@ -362,6 +429,17 @@ either be added to its `candidate_keys` list or set by hand in the console.
 - `ALLSET_SERVICE_KEY` is compared with `hmac.compare_digest` and **fails closed
   when unset**, so a misconfigured deploy refuses introspection rather than
   accepting anonymous callers.
+- Each consumer should have its own key, generated in the console (stored as
+  a SHA-256 hash, shown once) or listed in `ALLSET_SERVICE_KEYS`, rather than
+  `ALLSET_SERVICE_KEY`, which is shared with ai_service and the CMS backend's
+  internal endpoints. A per-consumer key unlocks introspection and its own
+  manifest push, and can be revoked alone; a revoked console key stops working
+  within 30 s. Onboarding steps are in [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
+- The `identity_*` tables, like `user_profiles`, have RLS on with no policies
+  and are revoked from `anon` and `authenticated`. `identity_audit_log` is
+  append-only even for the service role.
+- The admin console sends a strict Content-Security-Policy (`script-src 'self'`,
+  `frame-ancestors 'none'`) and keeps tokens out of cookies.
 - `user_profiles` has RLS enabled with no policies. Only the service-role key
   reads it, so a leaked anon key reads nothing rather than the whole roster.
 - Login reports one generic message for every failure mode, and password reset

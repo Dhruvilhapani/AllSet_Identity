@@ -93,6 +93,28 @@ SUPABASE_JWT_SECRET = os.environ.get('SUPABASE_JWT_SECRET', '')
 # Fails closed when unset, matching Broker Tools' HasLeadsMasterSyncSecret.
 SERVICE_KEY = os.environ.get('ALLSET_SERVICE_KEY', '')
 
+
+def _named_keys(name: str) -> dict[str, str]:
+    """Parse `consumer:key,consumer:key` into {consumer: key}."""
+    keys: dict[str, str] = {}
+    for entry in os.environ.get(name, '').split(','):
+        if not entry.strip():
+            continue
+        consumer, _, key = entry.strip().partition(':')
+        if not consumer.strip() or not key.strip():
+            # The entry is not echoed: without a colon it is likely a bare key.
+            raise RuntimeError(f'{name} entries must be "consumer:key"')
+        keys[consumer.strip()] = key.strip()
+    return keys
+
+
+# Per-consumer keys, accepted on the same header as ALLSET_SERVICE_KEY. A
+# consumer given one of these can be revoked alone, and its key unlocks only
+# introspection — ALLSET_SERVICE_KEY is shared with ai_service and the CMS
+# backend's internal endpoints, so handing it out grants those too. The name
+# before the colon only identifies the key for whoever rotates it.
+SERVICE_KEYS = _named_keys('ALLSET_SERVICE_KEYS')
+
 # ── Shadow migration (CMS legacy passwords) ──────────────────────────────────
 # Read-only connection to the CMS's Supabase project so a user's existing Django
 # PBKDF2 password keeps working once, then gets upgraded to Supabase. Only the
@@ -123,19 +145,19 @@ CORS_ORIGINS = [
 # this value only mirrors it so clients can report the expiry and schedule
 # refreshes. Changing it here alone changes nothing.
 #
-# The cost is revocation latency, and it is not small. Both `roles` and
-# `is_active` are read from the token's claims — /v1/introspect does no I/O by
-# design — so an access token already in a browser keeps the roles it was minted
-# with until it expires. Revoking sessions kills refresh tokens at once, but
-# nothing here can recall an issued JWT: not a role change, not deactivation,
-# not a password reset. At 30 minutes that window was a nuisance. At 7 days,
-# offboarding is not immediate and should not be assumed to be.
-#
-# The only way to invalidate live access tokens is to rotate the Supabase
-# project's JWT signing key, which signs everyone out at once. If eviction ever
-# needs to be quicker than this without that hammer, the fix is a short access
-# token plus a client refresh loop — see the revocation section in README.md.
+# Revocation no longer waits for the token to expire. Roles, is_active, name and
+# phone are read from the in-memory roster (app/permissions/cache.py), refreshed
+# every POLICY_CACHE_TTL_SECONDS, so a role change or deactivation reaches
+# consumers in about that plus their 60s cache. The token's own claims are used
+# only for a user created after the last refresh. A password reset still cannot
+# recall an issued JWT: the token keeps passing introspect until it expires,
+# only now with whatever roles the roster currently gives its user.
 ACCESS_TOKEN_TTL_SECONDS = _int('ACCESS_TOKEN_TTL_SECONDS', 604800)
+
+# How old the cached policy snapshot may get before a request starts a
+# background refresh. Bounds how long a grant, role or status change takes to
+# reach this instance.
+POLICY_CACHE_TTL_SECONDS = _int('POLICY_CACHE_TTL_SECONDS', 30)
 
 HTTP_TIMEOUT_SECONDS = _int('HTTP_TIMEOUT_SECONDS', 10)
 

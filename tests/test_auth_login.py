@@ -85,6 +85,21 @@ def test_successful_login_returns_tokens_and_capabilities(client, make_token, jw
 
 
 @respx.mock
+def test_login_returns_the_phone_from_the_token(client, make_token, jwks_mock):
+    """Consultation Agent's backend proxies sign-in and finds the broker
+    profile by phone straight from this response."""
+    respx.post(TOKEN_URL).mock(
+        return_value=Response(
+            200, json=session_body(make_token(roles=['presales'], phone='9876543210'))
+        )
+    )
+    response = client.post(
+        '/v1/auth/login', json={'email': 'someone@allset.in', 'password': 'correct-horse'}
+    )
+    assert response.json()['user']['phone'] == '9876543210'
+
+
+@respx.mock
 def test_login_normalises_the_email(client, make_token, jwks_mock):
     route = respx.post(TOKEN_URL).mock(
         return_value=Response(200, json=session_body(make_token(roles=['viewer'])))
@@ -226,12 +241,17 @@ def test_legacy_password_is_adopted_on_first_login(
                                           'roles': ['editor'], 'is_active': True}])
     )
     respx.patch(PROFILES_URL).mock(return_value=Response(204))
+    # The legacy role reaches the new account through identity_set_user_roles.
+    set_roles = respx.post(f'{SUPABASE_URL}/rest/v1/rpc/identity_set_user_roles').mock(
+        return_value=Response(200, json=['editor'])
+    )
 
     response = client.post(
         '/v1/auth/login', json={'email': 'old@allset.in', 'password': 'django-era-password'}
     )
     assert response.status_code == 200
     assert response.json()['user']['roles'] == ['editor']
+    assert set_roles.called
     # Re-authenticated after adoption so the token carries hook-written claims.
     assert len(token_route.calls) == 2
 
@@ -451,6 +471,21 @@ def test_login_roles_come_from_the_token_not_the_response_body(
         'a client that gates on this immediately after login would refuse the user'
     )
     assert user['apps']['broker_tools']['unrestricted_leads'] is True
+
+
+@respx.mock
+def test_login_grants_consultation_agent_to_broker_tools_roles(client, make_token, jwks_mock):
+    """Consultation Agent refuses a sign-in unless this block says access; with
+    no block at all, every login there failed with "no access"."""
+    respx.post(TOKEN_URL).mock(
+        return_value=Response(200, json=session_body(make_token(roles=['presales'])))
+    )
+    user = client.post(
+        '/v1/auth/login', json={'email': 'someone@allset.in', 'password': 'pw'}
+    ).json()['user']
+    block = user['apps']['consultation_agent']
+    assert (block['access'], block['primary_role']) == (True, 'presales')
+    assert block['permissions']['consultation_session']['read'] == ['own']
 
 
 @respx.mock
