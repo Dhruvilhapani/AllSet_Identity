@@ -23,7 +23,6 @@ os.environ.update({
     'SUPABASE_SERVICE_ROLE_KEY': 'test-service-role-key',
     'ALLSET_SERVICE_KEY': SERVICE_KEY,
     'SUPABASE_JWT_SECRET': JWT_SECRET,
-    'LEGACY_MIGRATION_ENABLED': 'false',
     'IDENTITY_DEBUG': 'false',
 })
 

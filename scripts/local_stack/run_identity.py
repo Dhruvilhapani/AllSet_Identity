@@ -6,7 +6,7 @@ console (kept in memory until restart), and mints an HS256 token whose claims
 come from the REAL custom_access_token_hook in the local Postgres. PostgREST,
 the SQL functions, the policy cache, the admin API and the console are what run.
 
-    pip install -r requirements-dev.txt -r requirements-legacy.txt   # psycopg2
+    pip install -r requirements-dev.txt 'psycopg2-binary>=2.9.10'
     scripts/local_stack/up.sh
     (cd admin && npm ci && npm run build)       # so /admin has something to serve
     python scripts/local_stack/run_identity.py  # then open http://127.0.0.1:8100/admin/
@@ -46,7 +46,6 @@ os.environ.update({
     'SUPABASE_SERVICE_ROLE_KEY': _sign({'role': 'service_role', 'iss': 'supabase'}),
     'SUPABASE_JWT_SECRET': SECRET,
     'ALLSET_SERVICE_KEY': 'local-shared-service-key',
-    'LEGACY_MIGRATION_ENABLED': 'false',
     'CORS_ORIGINS': 'http://localhost:5174',
     'POLICY_CACHE_TTL_SECONDS': '5',
 })
