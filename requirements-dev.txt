@@ -1,8 +1,8 @@
 # Local development and CI.
 #
-# Deliberately does NOT pull in requirements-legacy.txt: the test suite mocks
-# Supabase at the HTTP boundary and never touches Postgres, so a native
-# dependency would only make the install fragile for no benefit.
+# Deliberately does NOT pull in psycopg2: the test suite mocks Supabase at the
+# HTTP boundary and never touches Postgres, so a native dependency would only
+# make the install fragile for no benefit.
 -r requirements.txt
 pytest==8.4.2
 respx==0.23.1

@@ -156,12 +156,10 @@ mkdir -p "$SCRIPT_DIR/deploy"
   # os.environ.get(key, derived_default), which only fires when the key is
   # absent from the environment. An explicit empty string suppresses that
   # derivation and crashes the app at startup (confirmed against a real deploy).
-  # Secrets (anon/service-role keys, ALLSET_SERVICE_KEY, SUPABASE_JWT_SECRET,
-  # LEGACY_CMS_DB_PASSWORD) never go in here — they are bound from Secret
-  # Manager below.
+  # Secrets (anon/service-role keys, ALLSET_SERVICE_KEY, SUPABASE_JWT_SECRET)
+  # never go in here — they are bound from Secret Manager below.
   for key in SUPABASE_URL SUPABASE_JWKS_URL SUPABASE_JWT_ISSUER \
-             SUPABASE_JWT_AUDIENCE LEGACY_MIGRATION_ENABLED LEGACY_CMS_DB_HOST \
-             LEGACY_CMS_DB_PORT LEGACY_CMS_DB_NAME LEGACY_CMS_DB_USER LEGACY_CMS_DB_SSLMODE \
+             SUPABASE_JWT_AUDIENCE \
              CORS_ORIGINS HTTP_TIMEOUT_SECONDS ACCESS_TOKEN_TTL_SECONDS \
              LOGIN_RATE_LIMIT LOGIN_RATE_WINDOW_SECONDS IDENTITY_DEBUG; do
     value="$(read_env_var "$key")"
@@ -173,23 +171,7 @@ mkdir -p "$SCRIPT_DIR/deploy"
 # ---------------------------------------------------------------------------
 # Plain env vars the app refuses to boot without (app/core/config.py validate())
 # ---------------------------------------------------------------------------
-is_truthy() {
-  # Mirrors config._flag(): 1/true/yes/on, case-insensitive (no ${v,,} — bash 3.2)
-  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-    1|true|yes|on) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-LEGACY_ENABLED=false
-if is_truthy "$(read_env_var LEGACY_MIGRATION_ENABLED)"; then
-  LEGACY_ENABLED=true
-fi
-
 REQUIRED_PLAIN_VARS="SUPABASE_URL"
-if [[ "$LEGACY_ENABLED" == "true" ]]; then
-  REQUIRED_PLAIN_VARS+=" LEGACY_CMS_DB_HOST LEGACY_CMS_DB_USER"
-fi
 for key in $REQUIRED_PLAIN_VARS; do
   if [[ -z "$(read_env_var "$key")" ]]; then
     echo "ERROR: $key is empty in $(basename "$ENV_FILE") but the service requires it at startup." >&2
@@ -230,16 +212,11 @@ SECRET_PAIRS+=" SUPABASE_SERVICE_ROLE_KEY=identity-supabase-service-role-key"
 SECRET_PAIRS+=" ALLSET_SERVICE_KEY=identity-allset-service-key"
 SECRET_PAIRS+=" ALLSET_SERVICE_KEYS=identity-allset-service-keys"
 SECRET_PAIRS+=" SUPABASE_JWT_SECRET=identity-supabase-jwt-secret"
-SECRET_PAIRS+=" LEGACY_CMS_DB_PASSWORD=identity-legacy-cms-db-password"
 
-# Required at startup by config.validate(). LEGACY_CMS_DB_PASSWORD becomes
-# required when LEGACY_MIGRATION_ENABLED is on; SUPABASE_JWT_SECRET (HS256
+# Required at startup by config.validate(). SUPABASE_JWT_SECRET (HS256
 # verification for legacy-signed projects, security.py) is required whenever
 # the env file sets it, so moving it off plain env vars can't silently drop it.
 REQUIRED_SECRET_VARS="SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY ALLSET_SERVICE_KEY"
-if [[ "$LEGACY_ENABLED" == "true" ]]; then
-  REQUIRED_SECRET_VARS+=" LEGACY_CMS_DB_PASSWORD"
-fi
 if [[ -n "$(read_env_var SUPABASE_JWT_SECRET)" ]]; then
   REQUIRED_SECRET_VARS+=" SUPABASE_JWT_SECRET"
 fi

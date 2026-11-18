@@ -13,7 +13,7 @@ credentials, against the real SQL:
 - `down.sh` removes it.
 
 ```bash
-pip install -r requirements-dev.txt -r requirements-legacy.txt   # psycopg2
+pip install -r requirements-dev.txt 'psycopg2-binary>=2.9.10'
 scripts/local_stack/up.sh
 (cd admin && npm ci && npm run build)
 python scripts/local_stack/run_identity.py

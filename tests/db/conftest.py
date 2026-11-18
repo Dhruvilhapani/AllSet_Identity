@@ -1,11 +1,11 @@
 """Run db/001-005 against a real Postgres.
 
 Skipped unless IDENTITY_TEST_DATABASE_URL points at a Postgres server the tests
-may create a scratch database on, and psycopg2 is installed (it is in
-requirements-legacy.txt, deliberately not in requirements-dev.txt). For example:
+may create a scratch database on, and psycopg2 is installed (deliberately not
+in requirements-dev.txt). For example:
 
     docker run -d --name identity-pgtest -e POSTGRES_PASSWORD=pgtest -p 55432:5432 postgres:15
-    pip install -r requirements-legacy.txt
+    pip install 'psycopg2-binary>=2.9.10'
     IDENTITY_TEST_DATABASE_URL=postgresql://postgres:pgtest@localhost:55432/postgres pytest tests/db
 
 A fresh database is built for the session from tests/db/supabase_stub.sql (the

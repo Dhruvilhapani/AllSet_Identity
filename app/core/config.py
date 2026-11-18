@@ -115,18 +115,6 @@ def _named_keys(name: str) -> dict[str, str]:
 # before the colon only identifies the key for whoever rotates it.
 SERVICE_KEYS = _named_keys('ALLSET_SERVICE_KEYS')
 
-# ── Shadow migration (CMS legacy passwords) ──────────────────────────────────
-# Read-only connection to the CMS's Supabase project so a user's existing Django
-# PBKDF2 password keeps working once, then gets upgraded to Supabase. Only the
-# CMS has a durable legacy user store; Broker Tools' was ephemeral SQLite.
-LEGACY_MIGRATION_ENABLED = _flag('LEGACY_MIGRATION_ENABLED')
-LEGACY_CMS_DB_HOST = os.environ.get('LEGACY_CMS_DB_HOST', '')
-LEGACY_CMS_DB_PORT = _int('LEGACY_CMS_DB_PORT', 5432)
-LEGACY_CMS_DB_NAME = os.environ.get('LEGACY_CMS_DB_NAME', 'postgres')
-LEGACY_CMS_DB_USER = os.environ.get('LEGACY_CMS_DB_USER', '')
-LEGACY_CMS_DB_PASSWORD = os.environ.get('LEGACY_CMS_DB_PASSWORD', '')
-LEGACY_CMS_DB_SSLMODE = os.environ.get('LEGACY_CMS_DB_SSLMODE', 'require')
-
 # ── CORS ─────────────────────────────────────────────────────────────────────
 # Both admin UIs are same-origin under dev.allset.in in production; the extra
 # localhost entries cover the two Vite dev servers (5173 CMS, 5173 Broker Tools).
@@ -177,10 +165,6 @@ def validate() -> None:
     _require('SUPABASE_ANON_KEY')
     _require('SUPABASE_SERVICE_ROLE_KEY')
     _require('ALLSET_SERVICE_KEY')
-
-    if LEGACY_MIGRATION_ENABLED:
-        for name in ('LEGACY_CMS_DB_HOST', 'LEGACY_CMS_DB_USER', 'LEGACY_CMS_DB_PASSWORD'):
-            _require(name)
 
     if not SUPABASE_JWKS_URL or not SUPABASE_JWT_ISSUER:
         raise RuntimeError('SUPABASE_JWKS_URL and SUPABASE_JWT_ISSUER could not be derived')

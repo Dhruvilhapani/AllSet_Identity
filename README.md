@@ -198,7 +198,7 @@ unless you point it at a server it may create a scratch database on:
 
 ```bash
 docker run -d --name identity-pgtest -e POSTGRES_PASSWORD=pgtest -p 55432:5432 postgres:15
-pip install -r requirements-legacy.txt            # psycopg2
+pip install 'psycopg2-binary>=2.9.10'
 IDENTITY_TEST_DATABASE_URL=postgresql://postgres:pgtest@localhost:55432/postgres pytest tests/db
 ```
 
@@ -220,14 +220,6 @@ when any one package fails to build, so a single unbuildable dependency takes
 uvicorn down with it. Check that you activated the venv (`where uvicorn` should
 point inside `.venv`), then re-read the install output for the first error
 rather than the last.
-
-`psycopg2` is deliberately **not** a runtime dependency. It is used only by
-`app/legacy.py` for the shadow migration, which is off by default and imports
-it lazily. Install it only if you turn that on:
-
-```bash
-pip install -r requirements-legacy.txt
-```
 
 Tests mock Supabase at the HTTP boundary with `respx` and mint real RS256 tokens
 against a generated keypair, so the JWKS verification path is exercised for real
@@ -381,29 +373,6 @@ it themselves afterwards.
 Changing your own password via `/v1/auth/password/change` re-verifies the
 current one first, so a stolen access token on its own cannot lock the owner
 out, and it revokes your other sessions on the way through.
-
-## Shadow migration of CMS passwords
-
-The CMS has real users whose passwords are Django PBKDF2 hashes. Supabase stores
-bcrypt, so they cannot be imported. Rather than force a reset on everyone,
-`app/legacy.py` upgrades accounts on first login: verify against the Django hash
-over a **read-only** connection to the CMS's project, then set the same password
-in Supabase and stamp `legacy_migrated_at`.
-
-This covers **the CMS only** — Broker Tools had no durable password store to
-migrate from.
-
-Gated behind `LEGACY_MIGRATION_ENABLED`. Once every profile row has
-`legacy_migrated_at` set, turn the flag off and delete `app/legacy.py`, its
-tests, and the `psycopg2-binary` dependency.
-
-Rehearse it against a *copy* of the CMS user table before enabling in production.
-
-One consequence worth knowing: a legacy CMS `admin` maps to the unified `admin`,
-which is all-access in **both** apps — so on first login they gain visibility of
-every lead. There is no CMS-only administrator role to map them to instead
-(`admin` and `tech` are both global; `manager` lacks user management), and
-narrowing it would leave the CMS with no administrator.
 
 ## Deployment
 

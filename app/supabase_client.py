@@ -34,8 +34,8 @@ class SupabaseError(Exception):
 
 
 class InvalidCredentials(SupabaseError):
-    """Wrong email or password. Kept distinct so login can fall through to the
-    legacy shadow-migration path without treating an outage as a bad password."""
+    """Wrong email or password. Kept distinct so login can answer 401 without
+    treating an outage as a bad password."""
 
     def __init__(self, message: str = 'invalid email or password'):
         super().__init__(message, status_code=401, code='invalid_credentials')
@@ -66,8 +66,7 @@ def _service_headers() -> dict[str, str]:
 
 # Error codes GoTrue uses for a genuinely wrong email/password. Anything else at
 # 400 is a malformed request or a policy rejection, not a credential mismatch —
-# the distinction matters because only a real credential failure may fall
-# through to the legacy shadow-migration path.
+# the distinction matters because only a real credential failure is a 401.
 _BAD_CREDENTIAL_CODES = frozenset({
     'invalid_credentials',
     'invalid_grant',
@@ -108,7 +107,7 @@ def _raise_for_status(response: httpx.Response, action: str) -> None:
 
 def sign_in_with_password(email: str, password: str) -> dict:
     """Exchange credentials for a token pair. Raises InvalidCredentials on a
-    bad password so the caller can try the legacy path."""
+    bad password."""
     with _client() as client:
         response = client.post(
             '/token',

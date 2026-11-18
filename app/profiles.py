@@ -105,7 +105,6 @@ def upsert(
     full_name: str = '',
     phone: str = '',
     is_active: bool = True,
-    legacy_migrated_at: str | None = None,
 ) -> dict:
     """Create or replace a profile, without its roles.
 
@@ -120,8 +119,6 @@ def upsert(
         'phone': phone,
         'is_active': is_active,
     }
-    if legacy_migrated_at is not None:
-        payload['legacy_migrated_at'] = legacy_migrated_at
 
     with _client() as client:
         response = client.post(
@@ -152,15 +149,3 @@ def update(user_id: str, changes: dict) -> dict:
         raise ProfileNotFound()
     return rows[0]
 
-
-def mark_legacy_migrated(user_id: str) -> None:
-    """Stamp legacy_migrated_at. Once non-null for every row, the shadow
-    migration path can be switched off and deleted."""
-    with _client() as client:
-        response = client.patch(
-            f'/{_TABLE}',
-            headers=_headers(),
-            params={'user_id': f'eq.{user_id}'},
-            json={'legacy_migrated_at': 'now()'},
-        )
-    _check(response, 'legacy stamp')

@@ -39,7 +39,6 @@ export interface AdminUser {
   /** service -> attribute -> value */
   attributes: Record<string, Record<string, string>>
   is_active: boolean
-  legacy_migrated_at: string | null
   created_at: string | null
   apps: Record<string, AppBlock>
 }
