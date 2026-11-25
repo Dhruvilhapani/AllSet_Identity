@@ -111,6 +111,15 @@ class CreateKeyRequest(BaseModel):
     label: str = Field(default='', max_length=120)
 
 
+class AuditSearchRequest(BaseModel):
+    # In the body, not the query string, so an actor's email never lands in a request log.
+    target_type: str | None = Field(default=None, description='user, role or service')
+    target_key: str | None = None
+    actor_email: str | None = None
+    before_id: int | None = Field(default=None, description='for the next page: the last id you saw')
+    limit: int = Field(default=100, ge=1, le=500)
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _fresh() -> Snapshot:
@@ -571,14 +580,9 @@ def revoke_key(key: str, key_id: str, caller: Caller = Depends(require_global_ad
 
 # ── Audit ────────────────────────────────────────────────────────────────────
 
-@router.get('/audit')
-def list_audit(
-    target_type: str | None = Query(default=None, description='user, role or service'),
-    target_key: str | None = Query(default=None),
-    actor_email: str | None = Query(default=None),
-    before_id: int | None = Query(default=None, description='for the next page: the last id you saw'),
-    limit: int = Query(default=100, ge=1, le=500),
-) -> dict:
-    entries = policy_db.list_audit(target_type=target_type, target_key=target_key,
-                                   actor_email=actor_email, before_id=before_id, limit=limit)
+@router.post('/audit/search')
+def search_audit(payload: AuditSearchRequest) -> dict:
+    entries = policy_db.list_audit(target_type=payload.target_type, target_key=payload.target_key,
+                                   actor_email=payload.actor_email, before_id=payload.before_id,
+                                   limit=payload.limit)
     return {'entries': entries}
