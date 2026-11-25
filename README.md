@@ -160,7 +160,7 @@ in the seed). The console at `/admin` is the main client:
 | DELETE | `/v1/admin/services/{key}/resources/{resource}` | Remove a retired resource and its grants. |
 | GET, PUT | `/v1/admin/services/{key}/grants` | The matrix. PUT needs `If-Match` with the version from GET; 409 if someone else saved first. |
 | POST, DELETE | `/v1/admin/services/{key}/keys[/{id}]` | Generate (plaintext shown once) or revoke a service key. |
-| POST | `/v1/admin/audit/search` | Every change, newest first; filters in the body, so no email in the URL. |
+| GET | `/v1/admin/audit` | Every change, newest first. |
 
 Every write goes through a SQL function in `db/004_permissions.sql` that records
 an audit row in the same transaction.
