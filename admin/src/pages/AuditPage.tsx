@@ -18,10 +18,10 @@ export function AuditPage() {
     queryKey: ['audit', filters],
     initialPageParam: 0,
     queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams(Object.entries(filters).filter(([, v]) => v))
-      params.set('limit', String(PAGE))
-      if (pageParam) params.set('before_id', String(pageParam))
-      return api.get<{ entries: AuditEntry[] }>(`/admin/audit?${params}`).then((r) => r.entries)
+      // A POST, so the actor's email travels in the body and never in a request log.
+      const body = { ...Object.fromEntries(Object.entries(filters).filter(([, v]) => v)), limit: PAGE,
+        before_id: pageParam || undefined }
+      return api.post<{ entries: AuditEntry[] }>('/admin/audit/search', body).then((r) => r.entries)
     },
     getNextPageParam: (last) => (last.length === PAGE ? last[last.length - 1].id : undefined),
   })
