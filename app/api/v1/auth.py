@@ -1,8 +1,6 @@
 """Browser-facing session endpoints.
 
-Both admin UIs call these. Nothing here needs the service-role key except the
-shadow-migration upgrade, which is why login is the one endpoint that touches
-it — the frontends never do.
+Both admin UIs call these.
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ from dataclasses import replace
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
-from app import legacy, policy_db, profiles, supabase_client
+from app import supabase_client
 from app.api.deps import Caller, current_caller
 from app.core import config, security
 from app.permissions import cache
@@ -53,8 +51,7 @@ class CredentialPasswordChangeRequest(BaseModel):
 # ── Login rate limiting ──────────────────────────────────────────────────────
 # In-process, per-email. Replaces the CMS's users/throttles.py, which was
 # IP-keyed and therefore shared across everyone behind one office NAT. Supabase
-# applies its own limits on top; this exists to stop the legacy DB lookup from
-# being used as a password oracle at speed.
+# applies its own limits on top.
 _attempts: dict[str, list[float]] = {}
 _attempts_lock = threading.Lock()
 
@@ -131,24 +128,18 @@ def _session_response(session: dict) -> dict:
 
 @router.post('/login')
 def login(payload: LoginRequest) -> dict:
-    """Email + password sign-in.
-
-    On a credential failure, falls through to the legacy CMS password check and
-    upgrades the account in place if it matches. See app/legacy.py.
-    """
+    """Email + password sign-in."""
     email = payload.email.strip().lower()
     _rate_limit(email)
 
     try:
         session = supabase_client.sign_in_with_password(email, payload.password)
     except supabase_client.InvalidCredentials:
-        session = _try_legacy_login(email, payload.password)
-        if session is None:
-            # One generic message for every failure mode, so this cannot be used
-            # to work out which addresses exist.
-            raise HTTPException(
-                status.HTTP_401_UNAUTHORIZED, 'invalid email or password'
-            ) from None
+        # One generic message for every failure mode, so this cannot be used
+        # to work out which addresses exist.
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, 'invalid email or password'
+        ) from None
     except supabase_client.SupabaseError as exc:
         raise HTTPException(exc.status_code, exc.message) from exc
 
@@ -158,43 +149,6 @@ def login(payload: LoginRequest) -> dict:
         raise HTTPException(status.HTTP_403_FORBIDDEN, 'account is not active')
 
     return response
-
-
-def _try_legacy_login(email: str, password: str) -> dict | None:
-    """Verify a Django PBKDF2 password, then adopt the account into Supabase."""
-    legacy_user = legacy.verify_legacy_password(email, password)
-    if legacy_user is None:
-        return None
-
-    logger.info('adopting legacy CMS account into Supabase')
-
-    existing = supabase_client.admin_get_user_by_email(email)
-    if existing is None:
-        created = supabase_client.admin_create_user(
-            email, password, full_name=legacy_user.full_name
-        )
-        user_id = created['id']
-    else:
-        user_id = existing['id']
-        # The account exists in Supabase but the password did not match, so this
-        # is a first login after provisioning. Adopt the legacy password.
-        supabase_client.admin_set_password(user_id, password)
-
-    profile = profiles.get_by_user_id(user_id)
-    if profile is None:
-        profiles.upsert(
-            user_id=user_id,
-            email=email,
-            full_name=legacy_user.full_name,
-            is_active=True,
-        )
-        policy_db.set_user_roles(user_id, legacy_user.roles, actor=None)
-        cache.refresh_quietly()
-    profiles.mark_legacy_migrated(user_id)
-
-    # Re-authenticate so the returned token carries claims from the hook, which
-    # only now has a profile row to read.
-    return supabase_client.sign_in_with_password(email, password)
 
 
 @router.post('/refresh')
@@ -281,15 +235,9 @@ def change_password_with_credentials(payload: CredentialPasswordChangeRequest) -
     try:
         session = supabase_client.sign_in_with_password(email, payload.current_password)
     except supabase_client.InvalidCredentials:
-        # Same fall-through as login, so anyone who can sign in can also change
-        # their password. Dormant unless LEGACY_MIGRATION_ENABLED is on, and the
-        # cohort it covers — CMS accounts still on a Django hash — is exactly
-        # the one that has to use this screen rather than the in-app one.
-        session = _try_legacy_login(email, payload.current_password)
-        if session is None:
-            raise HTTPException(
-                status.HTTP_401_UNAUTHORIZED, 'invalid email or password'
-            ) from None
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, 'invalid email or password'
+        ) from None
     except supabase_client.SupabaseError as exc:
         raise HTTPException(exc.status_code, exc.message) from exc
 

@@ -207,7 +207,6 @@ create_or_update_secret "identity-supabase-service-role-key" "$(read_env_var SUP
 create_or_update_secret "identity-allset-service-key"        "$(read_env_var ALLSET_SERVICE_KEY)"
 create_or_update_secret "identity-allset-service-keys"       "$(read_env_var ALLSET_SERVICE_KEYS)"
 create_or_update_secret "identity-supabase-jwt-secret"       "$(read_env_var SUPABASE_JWT_SECRET)"
-create_or_update_secret "identity-legacy-cms-db-password"    "$(read_env_var LEGACY_CMS_DB_PASSWORD)"
 
 echo "==> Secrets: $CREATED_COUNT created, $UPDATED_COUNT updated, $UNCHANGED_COUNT unchanged, $SKIPPED_COUNT skipped (empty)."
 

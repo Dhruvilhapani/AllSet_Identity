@@ -146,7 +146,6 @@ def _profile_response(snapshot: Snapshot, profile: dict) -> dict:
         'role_labels': [snapshot.roles[role].label for role in roles],
         'attributes': attributes,
         'is_active': is_active,
-        'legacy_migrated_at': profile.get('legacy_migrated_at'),
         'created_at': profile.get('created_at'),
         'apps': build_apps(snapshot, roles, is_active=is_active, attributes=attributes),
     }
