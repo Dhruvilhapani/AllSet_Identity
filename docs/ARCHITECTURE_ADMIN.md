@@ -318,7 +318,7 @@ keep their paths and behaviour.
 | GET, PUT | `/services/{key}/grants` | One service's whole matrix; PUT needs `If-Match: <grants_version>`, answers 409 when stale, and is refused for system services |
 | POST | `/services/{key}/keys` | New key, plaintext returned once |
 | DELETE | `/services/{key}/keys/{id}` | Revoke a key |
-| GET | `/audit` | The audit log, filtered by actor, target or date |
+| POST | `/audit/search` | The audit log, filtered by actor, target or date (in the body, so no email in the URL) |
 
 Service-facing: `PUT /v1/services/manifest`, authenticated by the calling
 service's own key.
