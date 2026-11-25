@@ -17,7 +17,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app import console, redact
+from app import console
 from app.api.v1 import admin, auth, introspect, services
 from app.core import config
 from app.permissions.cache import PolicyUnavailable
@@ -29,10 +29,6 @@ logging.basicConfig(
     level=logging.DEBUG if config.DEBUG else logging.INFO,
     format='%(asctime)s %(levelname)s %(name)s %(message)s',
 )
-# httpx logs every request URL at INFO, and Supabase lookups put emails in them.
-for _noisy in ('httpx', 'httpcore'):
-    logging.getLogger(_noisy).setLevel(logging.WARNING)
-redact.install()
 logger = logging.getLogger(__name__)
 
 config.validate()

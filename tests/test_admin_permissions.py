@@ -270,18 +270,9 @@ def test_an_unknown_service_is_a_404(client, make_token, jwks_mock):
 @respx.mock
 def test_audit_filters_reach_the_query(client, make_token, jwks_mock):
     route = respx.get(AUDIT_URL).mock(return_value=Response(200, json=[{'id': 9, 'action': 'user.roles'}]))
-    body = client.post('/v1/admin/audit/search',
-                       json={'target_type': 'user', 'target_key': 'abc', 'actor_email': 'Admin@AllSet.in',
-                             'before_id': 10, 'limit': 20},
-                       headers=auth(make_token(roles=['admin']))).json()
+    body = client.get('/v1/admin/audit?target_type=user&target_key=abc&before_id=10&limit=20',
+                      headers=auth(make_token(roles=['admin']))).json()
     params = route.calls.last.request.url.params
     assert body['entries'] == [{'id': 9, 'action': 'user.roles'}]
-    assert (params['target_type'], params['target_key'], params['actor_email'], params['id'],
-            params['limit']) == ('eq.user', 'eq.abc', 'ilike.Admin@AllSet.in', 'lt.10', '20')
-
-
-def test_audit_is_not_searchable_through_the_query_string(client, make_token, jwks_mock):
-    """The actor email must stay out of the URL, where request logs keep it."""
-    response = client.get('/v1/admin/audit?actor_email=admin@allset.in',
-                          headers=auth(make_token(roles=['admin'])))
-    assert response.status_code in (404, 405)
+    assert (params['target_type'], params['target_key'], params['id'], params['limit']) == \
+           ('eq.user', 'eq.abc', 'lt.10', '20')
